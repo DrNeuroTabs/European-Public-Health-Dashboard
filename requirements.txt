@@ -1,0 +1,11 @@
+streamlit
+pandas
+numpy
+plotly
+prophet
+ruptures
+requests
+statsmodels
+pycountry
+icd10-cm
+pmdarima
