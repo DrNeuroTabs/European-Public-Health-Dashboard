@@ -250,11 +250,11 @@ def load_eurostat_series(dataset_id: str) -> pd.DataFrame:
 
     sub = long[mask].copy()
     rename = {"geo": "Region", "sex": "Sex"}
-    others = [d for d in dims if d not in ("geo", "sex", "freq", "unit", "age", "resid")]
+    others = [d for d in dims if d not in ("geo","sex","freq","unit","age","resid")]
     if len(others) == 1:
         rename[others[0]] = "Category"
     out = sub.rename(columns=rename)
-    cols = ["Region", "Year", "Category", "Sex", "Rate"]
+    cols = ["Region","Year","Category","Sex","Rate"]
     return out[[c for c in cols if c in out.columns]]
 
 @st.cache_data
@@ -429,7 +429,6 @@ def draw_directed_network(nodes, edges, title):
                            node_color='skyblue',
                            ax=ax)
 
-    # labels at radius 1.7, all sides
     radius = 1.7
     for i, node in enumerate(nodes):
         angle = angles[i]
@@ -445,7 +444,6 @@ def draw_directed_network(nodes, edges, title):
                 bbox=dict(facecolor='white', edgecolor='none', pad=0.3),
                 zorder=3)
 
-    # dynamic title above all labels
     top_label_y = max(np.sin(angles))*radius
     title_y = top_label_y + 0.15
     ax.set_title(title, y=title_y, pad=10)
@@ -491,13 +489,14 @@ def main():
     if df_f.empty:
         st.warning("No data for selected filters.")
     else:
+        joinpoint_df = compute_joinpoints_and_apc(df_f)
         st.markdown("### Joinpoint Trend")
         plot_joinpoints_comparative(df_f, f"{cause_full} Trend by Sex")
         st.markdown("### Segmented Linear Fits")
         for sc, sf in zip(sex_codes, sex_sel):
             plot_segmented_fit_series(df_f[df_f["Sex"]==sc], f"{cause_full} ({sf}) Fit")
         st.markdown("### Joinpoint & APC")
-        st.dataframe(compute_joinpoints_and_apc(df_f), use_container_width=True)
+        st.dataframe(joinpoint_df, use_container_width=True)
         st.markdown(f"### Forecast next {forecast_yrs} yrs ({method})")
         for sc, sf in zip(sex_codes, sex_sel):
             forecast_mortality(df_f[df_f["Sex"]==sc], forecast_yrs, method, f"{cause_full} ({sf}) Forecast")
@@ -557,12 +556,10 @@ def main():
     # Cluster analysis
     st.markdown("---")
     st.header("Cluster Analysis (Total Rates)")
-    df_cl = df[(df["Cause"]==cause_code) &
-               (df["Sex"]=="T") &
-               (df["Year"].between(*year_range))]
+    df_cl = df[(df["Cause"]==cause_code)&(df["Sex"]=="T")&(df["Year"].between(*year_range))]
     pivot = df_cl.pivot(index="Country", columns="Year", values="Rate")
-    pivot = pivot.interpolate(axis=1, limit_direction="both")\
-                 .ffill(axis=1).bfill(axis=1).dropna(axis=0, how="all")
+    pivot = pivot.interpolate(axis=1, limit_direction="both").ffill(axis=1).bfill(axis=1).dropna(axis=0, how="all")
+    clust_df = pd.DataFrame()
     if pivot.shape[0] < 3:
         st.warning("Not enough total-rate countries to cluster.")
     else:
@@ -580,8 +577,7 @@ def main():
         best_k = max(sil_scores, key=sil_scores.get)
         st.write(f"Optimal k: **{best_k}**")
         km = KMeans(n_clusters=best_k, random_state=0).fit(X)
-        clust_df = pd.DataFrame({"Country": pivot.index,
-                                 "Cluster": km.labels_.astype(str)})
+        clust_df = pd.DataFrame({"Country": pivot.index, "Cluster": km.labels_.astype(str)})
         clust_df["CountryFull"] = clust_df["Country"].map(COUNTRY_NAME_MAP)
         clust_df["iso_alpha"]   = clust_df["Country"].apply(alpha3_from_a2)
         st.plotly_chart(px.choropleth(clust_df,
@@ -599,11 +595,9 @@ def main():
     sel_countries = st.multiselect("Select countries (default: all)", country_list, default=country_list)
     gl_maxlag     = st.slider("Global max lag (yrs)", 1, 5, 2, key="gl_maxlag")
     bf_thresh     = st.number_input("BF₁₀ cutoff", 1.0, 100.0, 3.0, 0.5, key="bf_thr")
+    bf_mat = pd.DataFrame()
     if len(sel_countries) >= 2:
-        df_g     = df[(df["Cause"]==cause_code) &
-                      (df["CountryFull"].isin(sel_countries)) &
-                      (df["Sex"]=="T") &
-                      (df["Year"].between(*year_range))]
+        df_g     = df[(df["Cause"]==cause_code)&(df["CountryFull"].isin(sel_countries))&(df["Sex"]=="T")&(df["Year"].between(*year_range))]
         pivot_gc = df_g.pivot_table(index="Year", columns="CountryFull", values="Rate")
         common   = [c for c in sel_countries if c in pivot_gc.columns]
         bf_mat   = pd.DataFrame(np.nan, index=common, columns=common)
@@ -611,7 +605,7 @@ def main():
             for dst in common:
                 if src == dst: continue
                 pair = pivot_gc[[dst, src]].dropna()
-                if pair.shape[0] >= gl_maxlag + 3:
+                if len(pair) >= gl_maxlag + 3:
                     bf_mat.loc[src, dst] = compute_bayes_factor_bic(pair, gl_maxlag)
         st.subheader("Bayes-factor matrix (both directions)")
         st.dataframe(bf_mat.style.format("{:.2f}"))
@@ -633,8 +627,7 @@ def main():
     foc_full = st.selectbox("Focal country", country_list, index=country_list.index("Germany"))
     foc_code = REV_COUNTRY_NAME_MAP.get(foc_full, foc_full)
     nbrs     = NEIGHBORS.get(foc_code, [])
-    map_df   = pd.DataFrame({"Country":[foc_code]+nbrs,
-                             "Role":["Focal"]+["Neighbor"]*len(nbrs)})
+    map_df   = pd.DataFrame({"Country":[foc_code]+nbrs, "Role":["Focal"]+["Neighbor"]*len(nbrs)})
     map_df["CountryFull"] = map_df["Country"].map(COUNTRY_NAME_MAP)
     map_df["iso_alpha"]   = map_df["Country"].apply(alpha3_from_a2)
     st.plotly_chart(px.choropleth(map_df,
@@ -644,12 +637,10 @@ def main():
                                   locationmode="ISO-3",
                                   scope="europe",
                                   title="Focal & Neighbors"))
+    bf_n = pd.DataFrame()
     if nbrs:
         gb       = [foc_code] + nbrs
-        df_n     = df[(df["Cause"]==cause_code) &
-                      (df["Country"].isin(gb)) &
-                      (df["Sex"]=="T") &
-                      (df["Year"].between(*year_range))]
+        df_n     = df[(df["Cause"]==cause_code)&(df["Country"].isin(gb))&(df["Sex"]=="T")&(df["Year"].between(*year_range))]
         pivot_n  = df_n.pivot_table(index="Year", columns="Country", values="Rate")
         common_n = [c for c in gb if c in pivot_n.columns]
         nbr_lag  = st.slider("Neighbor max lag (yrs)", 1, 5, 2, key="nbr_lag")
@@ -659,7 +650,7 @@ def main():
             for dst in common_n:
                 if src == dst: continue
                 pair = pivot_n[[dst, src]].dropna()
-                if pair.shape[0] >= nbr_lag + 3:
+                if len(pair) >= nbr_lag + 3:
                     bf_n.loc[src, dst] = compute_bayes_factor_bic(pair, nbr_lag)
         st.subheader("Neighbor Bayes-factor matrix (both directions)")
         st.dataframe(bf_n.style.format("{:.2f}"))
@@ -673,8 +664,28 @@ def main():
         nodes_n = [COUNTRY_NAME_MAP[c] for c in common_n]
         draw_directed_network(nodes_n, edges_n, f"Neighbor Network (BF₁₀ ≥ {nbr_bf})")
 
+    # Report download
     st.markdown("---")
-    st.info("Labels now at radius 1.7; titles auto-offset above labels; edges under nodes.")
+    st.header("Download Report")
+    # collect results into Excel
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+        if not df_f.empty:
+            joinpoint_df.to_excel(writer, sheet_name="Joinpoints", index=False)
+        if not bf_mat.empty:
+            bf_mat.to_excel(writer, sheet_name="GlobalBF")
+        if not bf_n.empty:
+            bf_n.to_excel(writer, sheet_name="NeighborBF")
+        if not clust_df.empty:
+            clust_df.to_excel(writer, sheet_name="Clusters", index=False)
+        writer.save()
+    buffer.seek(0)
+    st.download_button(
+        label="Download current results as Excel report",
+        data=buffer,
+        file_name="public_health_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 if __name__ == "__main__":
     main()
