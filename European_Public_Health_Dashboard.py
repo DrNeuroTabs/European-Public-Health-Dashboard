@@ -393,7 +393,7 @@ def compute_bayes_factor_bic(pair_df: pd.DataFrame, maxlag: int) -> float:
         df_pair[cause].values[maxlag - lag:-lag]
         for lag in range(1, maxlag + 1)
     ])
-    X_alt = sm.add_constant(X_alt)
+    X_alt = sm.add_constant(X_alt) 
     X_null = np.ones((len(Y), 1))
     m0 = sm.OLS(Y, X_null).fit()
     m1 = sm.OLS(Y, X_alt).fit()
@@ -443,7 +443,7 @@ def main():
         st.warning("No data for selected filters.")
     else:
         st.markdown("### Joinpoint Trend")
-        plot_joinpoints_comparative(df_f, f"{cause_full} Trend by Sex")
+        plot_joinpoints_comparative(df_f, f"{cause_full} Trend")
         st.markdown("### Segmented Linear Fits")
         for sc, sf in zip(sex_codes, sex_sel):
             plot_segmented_fit_series(df_f[df_f["Sex"]==sc], f"{cause_full} ({sf}) Fit")
@@ -550,7 +550,7 @@ def main():
             title=f"{cause_full} Clusters (k={best_k})"
         ))
 
-    # --- Global Bayesian Causality with Debug & Beefy Arrows ---------------
+    # --- Global Bayesian Causality ------------------------------------------
     st.markdown("---")
     st.header("Global Bayesian Causality")
     st.markdown(
@@ -583,16 +583,6 @@ def main():
                         pair = pivot_gc[[dst, src]]
                         bf_mat.loc[src, dst] = compute_bayes_factor_bic(pair, gl_maxlag)
 
-            # Debug output
-            st.subheader("🔍 Debug Bayes-factors & edges")
-            st.write("Threshold for arrows (BF₁₀ ≥):", bf_thresh)
-            st.dataframe(bf_mat.style.format("{:.2f}"))
-            edges = [
-                (i, j) for i in common for j in common
-                if i != j and pd.notna(bf_mat.loc[i, j]) and bf_mat.loc[i, j] >= bf_thresh
-            ]
-            st.write("Detected edges:", edges)
-
             # raw BF heatmap
             fig_hm = px.imshow(
                 bf_mat,
@@ -602,7 +592,11 @@ def main():
             )
             st.plotly_chart(fig_hm)
 
-            # build directed network with beefier arrows
+            # build directed network
+            edges = [
+                (i, j) for i in common for j in common
+                if i != j and pd.notna(bf_mat.loc[i, j]) and bf_mat.loc[i, j] >= bf_thresh
+            ]
             theta = np.linspace(0, 2*np.pi, len(common), endpoint=False)
             pos = {n: (np.cos(t), np.sin(t)) for n, t in zip(common, theta)}
             fig_net = go.Figure()
@@ -620,20 +614,21 @@ def main():
                 fig_net.add_annotation(
                     x=x1, y=y1, ax=x0, ay=y0,
                     showarrow=True,
-                    arrowhead=2,
-                    arrowsize=2,
-                    arrowwidth=2,
-                    arrowcolor="crimson"
+                    arrowhead=4,
+                    arrowsize=3,
+                    arrowwidth=3,
+                    arrowcolor="black"
                 )
             fig_net.update_layout(
                 title=f"Global Network (BF₁₀ ≥ {bf_thresh})",
-                xaxis=dict(visible=False),
-                yaxis=dict(visible=False),
-                height=600
+                xaxis=dict(visible=False, range=[-1.2,1.2]),
+                yaxis=dict(visible=False, range=[-1.2,1.2]),
+                height=600,
+                margin=dict(l=0, r=0, t=40, b=0)
             )
             st.plotly_chart(fig_net)
 
-    # --- Neighbor-Based Bayesian Causality with Debug & Beefy Arrows  -------
+    # --- Neighbor-Based Bayesian Causality -------------------------------
     st.markdown("---")
     st.header("Neighbor-Based Bayesian Causality")
     st.markdown("Same BF₁₀ approach, focused on a focal country and its neighbors.")
@@ -664,8 +659,8 @@ def main():
         common_n = [c for c in gb if c in pivot_n.columns]
 
         if len(common_n) >= 2:
-            nbr_lag     = st.slider("Neighbor max lag (yrs)", 1, 5, 2, key="nbr_lag_bf")
-            nbr_bf_cut  = st.number_input("Neighbor BF₁₀ cutoff", 1.0, 100.0, 3.0, 0.5, key="nbr_bf_cut")
+            nbr_lag    = st.slider("Neighbor max lag (yrs)", 1, 5, 2, key="nbr_lag_bf")
+            nbr_bf_cut = st.number_input("Neighbor BF₁₀ cutoff", 1.0, 100.0, 3.0, 0.5, key="nbr_bf_cut")
 
             bf_n = pd.DataFrame(np.nan, index=common_n, columns=common_n)
             with st.spinner("Computing neighbor Bayes-factors…"):
@@ -675,16 +670,6 @@ def main():
                             continue
                         pair = pivot_n[[dst, src]]
                         bf_n.loc[src, dst] = compute_bayes_factor_bic(pair, nbr_lag)
-
-            # Debug output
-            st.subheader("🔍 Debug Neighbor Bayes-factors & edges")
-            st.write("Neighbor threshold (BF₁₀ ≥):", nbr_bf_cut)
-            st.dataframe(bf_n.style.format("{:.2f}"))
-            edges_n = [
-                (i, j) for i in common_n for j in common_n
-                if i != j and pd.notna(bf_n.loc[i, j]) and bf_n.loc[i, j] >= nbr_bf_cut
-            ]
-            st.write("Detected neighbor edges:", edges_n)
 
             # raw BF heatmap
             names = {c: COUNTRY_NAME_MAP[c] for c in common_n}
@@ -697,6 +682,10 @@ def main():
             st.plotly_chart(fig_hm_n)
 
             # directed neighbor network
+            edges_n = [
+                (i, j) for i in common_n for j in common_n
+                if i != j and pd.notna(bf_n.loc[i, j]) and bf_n.loc[i, j] >= nbr_bf_cut
+            ]
             theta_n = np.linspace(0, 2*np.pi, len(common_n), endpoint=False)
             pos_n = {COUNTRY_NAME_MAP[c]: (np.cos(t), np.sin(t))
                      for c, t in zip(common_n, theta_n)}
@@ -715,16 +704,17 @@ def main():
                 fig_net_n.add_annotation(
                     x=x1, y=y1, ax=x0, ay=y0,
                     showarrow=True,
-                    arrowhead=2,
-                    arrowsize=2,
-                    arrowwidth=2,
-                    arrowcolor="crimson"
+                    arrowhead=4,
+                    arrowsize=3,
+                    arrowwidth=3,
+                    arrowcolor="black"
                 )
             fig_net_n.update_layout(
                 title=f"Neighbor Network (BF₁₀ ≥ {nbr_bf_cut})",
-                xaxis=dict(visible=False),
-                yaxis=dict(visible=False),
-                height=600
+                xaxis=dict(visible=False, range=[-1.2,1.2]),
+                yaxis=dict(visible=False, range=[-1.2,1.2]),
+                height=600,
+                margin=dict(l=0, r=0, t=40, b=0)
             )
             st.plotly_chart(fig_net_n)
 
@@ -733,4 +723,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
