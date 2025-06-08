@@ -20,6 +20,7 @@ import pycountry
 from requests.exceptions import HTTPError
 import networkx as nx
 import matplotlib.pyplot as plt
+import zipfile
 
 # --------------------------------------------------------------------------
 # CONSTANTS
@@ -349,43 +350,34 @@ def plot_segmented_fit_series(df_sub: pd.DataFrame, title: str):
 def get_prophet_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     dfp = df_sub[["Year","Rate"]].rename(columns={"Year":"ds","Rate":"y"})
     dfp["ds"] = pd.to_datetime(dfp["ds"].astype(str), format="%Y")
-    m = Prophet(yearly_seasonality=False, daily_seasonality=False)
-    m.fit(dfp)
-    fut = m.make_future_dataframe(periods=periods, freq="Y")
-    fc  = m.predict(fut)
+    m = Prophet(yearly_seasonality=False, daily_seasonality=False); m.fit(dfp)
+    fut = m.make_future_dataframe(periods=periods, freq="Y"); fc = m.predict(fut)
     return pd.DataFrame({"Year":fc["ds"].dt.year, "Prophet":fc["yhat"]})
 
 def get_arima_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     ser = df_sub.set_index("Year")["Rate"]
-    res = ARIMA(ser, order=(1,1,1)).fit()
-    preds = res.forecast(periods)
+    res = ARIMA(ser, order=(1,1,1)).fit(); preds = res.forecast(periods)
     yrs = np.arange(ser.index.max()+1, ser.index.max()+1+periods)
     return pd.DataFrame({"Year":yrs, "ARIMA":preds.values})
 
 def get_ets_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     ser = df_sub.set_index("Year")["Rate"]
     m = ExponentialSmoothing(ser, trend="add", seasonal=None).fit(optimized=True)
-    preds = m.forecast(periods)
-    yrs = np.arange(ser.index.max()+1, ser.index.max()+1+periods)
+    preds = m.forecast(periods); yrs = np.arange(ser.index.max()+1, ser.index.max()+1+periods)
     return pd.DataFrame({"Year":yrs, "ETS":preds.values})
 
 def forecast_mortality(df_sub: pd.DataFrame, periods: int, method: str, title: str):
     n = df_sub["Rate"].dropna().shape[0]
     if n < 3:
-        st.warning(f"Not enough data ({n}) to forecast.")
-        return
+        st.warning(f"Not enough data ({n}) to forecast."); return
     prop = get_prophet_forecast(df_sub, periods)
     ari  = get_arima_forecast(df_sub, periods)
     ets  = get_ets_forecast(df_sub, periods)
     fc = prop.merge(ari, on="Year").merge(ets, on="Year")
-    if method == "Prophet":
-        fc["Forecast"] = fc["Prophet"]
-    elif method == "ARIMA":
-        fc["Forecast"] = fc["ARIMA"]
-    elif method == "ETS":
-        fc["Forecast"] = fc["ETS"]
-    else:
-        fc["Forecast"] = fc[["Prophet","ARIMA","ETS"]].mean(axis=1)
+    if method=="Prophet": fc["Forecast"]=fc["Prophet"]
+    elif method=="ARIMA": fc["Forecast"]=fc["ARIMA"]
+    elif method=="ETS": fc["Forecast"]=fc["ETS"]
+    else: fc["Forecast"]=fc[["Prophet","ARIMA","ETS"]].mean(axis=1)
     hist = df_sub[["Year","Rate"]].rename(columns={"Rate":"History"})
     combined = hist.merge(fc[["Year","Forecast"]], on="Year", how="outer")
     fig = px.line(combined, x="Year", y=["History","Forecast"], title=title)
@@ -398,23 +390,17 @@ def compute_bayes_factor_bic(pair_df: pd.DataFrame, maxlag: int) -> float:
     target, cause = df_pair.columns
     Y = df_pair[target].values[maxlag:]
     X_alt = np.column_stack([df_pair[cause].values[maxlag-lag:-lag] for lag in range(1, maxlag+1)])
-    X_alt = sm.add_constant(X_alt)
-    X_null = np.ones((len(Y),1))
-    m0 = sm.OLS(Y, X_null).fit()
-    m1 = sm.OLS(Y, X_alt).fit()
+    X_alt = sm.add_constant(X_alt); X_null = np.ones((len(Y),1))
+    m0 = sm.OLS(Y, X_null).fit(); m1 = sm.OLS(Y, X_alt).fit()
     return float(np.exp((m0.bic - m1.bic)/2.0))
 
 # --------------------------------------------------------------------------
 # DRAW DIRECTED NETWORK
 # --------------------------------------------------------------------------
 def draw_directed_network(nodes, edges, title):
-    G = nx.DiGraph()
-    G.add_nodes_from(nodes)
-    G.add_edges_from(edges)
-
+    G = nx.DiGraph(); G.add_nodes_from(nodes); G.add_edges_from(edges)
     angles = np.linspace(0, 2*np.pi, len(nodes), endpoint=False)
     pos    = {nodes[i]:(np.cos(angles[i]), np.sin(angles[i])) for i in range(len(nodes))}
-
     fig, ax = plt.subplots(figsize=(6,6))
     if edges:
         nx.draw_networkx_edges(G, pos,
@@ -424,11 +410,7 @@ def draw_directed_network(nodes, edges, title):
                                edge_color='gray',
                                ax=ax,
                                connectionstyle="arc3,rad=0.1")
-    nx.draw_networkx_nodes(G, pos,
-                           node_size=500,
-                           node_color='skyblue',
-                           ax=ax)
-
+    nx.draw_networkx_nodes(G, pos, node_size=500, node_color='skyblue', ax=ax)
     radius = 1.7
     for i, node in enumerate(nodes):
         angle = angles[i]
@@ -436,14 +418,10 @@ def draw_directed_network(nodes, edges, title):
         deg   = np.degrees(angle)
         ha    = "left" if np.cos(angle)>0 else "right"
         va    = "bottom" if np.sin(angle)>0 else "top"
-        ax.text(x, y, node,
-                ha=ha, va=va,
-                rotation=deg,
-                rotation_mode='anchor',
-                fontsize=10,
+        ax.text(x, y, node, ha=ha, va=va, rotation=deg,
+                rotation_mode='anchor', fontsize=10,
                 bbox=dict(facecolor='white', edgecolor='none', pad=0.3),
                 zorder=3)
-
     top_label_y = max(np.sin(angles))*radius
     title_y = top_label_y + 0.15
     ax.set_title(title, y=title_y, pad=10)
@@ -458,13 +436,11 @@ def main():
     st.title("European Public Health Dashboard")
     st.markdown("by Younes Adam Tabi")
 
-    # Load & label mortality data
     df = load_data()
     df["CountryFull"] = df["Country"].map(COUNTRY_NAME_MAP)
     df["CauseFull"]   = df["Cause"].map(CAUSE_NAME_MAP)
     df["SexFull"]     = df["Sex"].map(SEX_NAME_MAP)
 
-    # Sidebar controls
     countries    = sorted(df["CountryFull"].dropna().unique())
     country_full = st.sidebar.selectbox("Country", countries, index=countries.index("European Union"))
     country_code = REV_COUNTRY_NAME_MAP.get(country_full, country_full)
@@ -478,16 +454,16 @@ def main():
     forecast_yrs = st.sidebar.slider("Forecast Horizon (yrs)", 1, 30, 10)
     method       = st.sidebar.selectbox("Forecast Method", ["Prophet","ARIMA","ETS","Ensemble"])
 
-    # Mortality trends & forecasts
     st.header(f"{cause_full} in {country_full} ({year_range[0]}–{year_range[1]})")
     df_f = df[
-        (df["Country"]==country_code) &
-        (df["Cause"]  == cause_code) &
-        (df["Sex"].isin(sex_codes)) &
+        (df["Country"]==country_code)&
+        (df["Cause"]  == cause_code)&
+        (df["Sex"].isin(sex_codes))&
         (df["Year"].between(*year_range))
     ]
     if df_f.empty:
         st.warning("No data for selected filters.")
+        joinpoint_df = pd.DataFrame()
     else:
         joinpoint_df = compute_joinpoints_and_apc(df_f)
         st.markdown("### Joinpoint Trend")
@@ -501,7 +477,6 @@ def main():
         for sc, sf in zip(sex_codes, sex_sel):
             forecast_mortality(df_f[df_f["Sex"]==sc], forecast_yrs, method, f"{cause_full} ({sf}) Forecast")
 
-    # Health-factor regression
     st.markdown("---")
     st.header("Health Factors – Exploratory Panel Regression")
     factors = st.multiselect("Select health factors", list(FACTOR_IDS.keys()))
@@ -516,13 +491,13 @@ def main():
         else:
             all_f = load_all_factors()
             pf = all_f[
-                (all_f["FactorName"].isin(factors)) &
-                (all_f["Year"].between(reg_min, reg_max)) &
+                (all_f["FactorName"].isin(factors))&
+                (all_f["Year"].between(reg_min, reg_max))&
                 (all_f["Sex"].isin(sex_codes))
             ]
             pm = df[
-                (df["Cause"]==cause_code) &
-                (df["Year"].between(reg_min, reg_max)) &
+                (df["Cause"]==cause_code)&
+                (df["Year"].between(reg_min, reg_max))&
                 (df["Sex"].isin(sex_codes))
             ][["Country","Year","Rate"]].rename(columns={"Rate":"Mortality"})
             panel = pf.pivot_table(index=["Country","Year"],
@@ -553,15 +528,15 @@ def main():
                                            labels={"x":"Factor","y":"Coefficient"},
                                            title="Regression Coefficients"))
 
-    # Cluster analysis
     st.markdown("---")
     st.header("Cluster Analysis (Total Rates)")
     df_cl = df[(df["Cause"]==cause_code)&(df["Sex"]=="T")&(df["Year"].between(*year_range))]
     pivot = df_cl.pivot(index="Country", columns="Year", values="Rate")
-    pivot = pivot.interpolate(axis=1, limit_direction="both").ffill(axis=1).bfill(axis=1).dropna(axis=0, how="all")
-    clust_df = pd.DataFrame()
+    pivot = pivot.interpolate(axis=1, limit_direction="both")\
+                 .ffill(axis=1).bfill(axis=1).dropna(axis=0, how="all")
     if pivot.shape[0] < 3:
         st.warning("Not enough total-rate countries to cluster.")
+        clust_df = pd.DataFrame()
     else:
         X = pivot.values
         max_k = min(10, X.shape[0]-1)
@@ -588,7 +563,6 @@ def main():
                                       scope="europe",
                                       title=f"{cause_full} Clusters (k={best_k})"))
 
-    # Global Bayesian Causality (Neighbors Only)
     st.markdown("---")
     st.header("Global Bayesian Causality (Neighbors Only)")
     country_list  = sorted(df["CountryFull"].dropna().unique())
@@ -621,7 +595,6 @@ def main():
                         edges.append((src, dst))
         draw_directed_network(common, edges, f"Global Neighbor Network (BF₁₀ ≥ {bf_thresh})")
 
-    # Neighbor-based Bayesian Causality
     st.markdown("---")
     st.header("Neighbor-Based Bayesian Causality")
     foc_full = st.selectbox("Focal country", country_list, index=country_list.index("Germany"))
@@ -664,27 +637,28 @@ def main():
         nodes_n = [COUNTRY_NAME_MAP[c] for c in common_n]
         draw_directed_network(nodes_n, edges_n, f"Neighbor Network (BF₁₀ ≥ {nbr_bf})")
 
-    # Report download
+    # ----------------------------------------------------------------------
+    # Report download button
+    # ----------------------------------------------------------------------
     st.markdown("---")
     st.header("Download Report")
-    # collect results into Excel
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+    # package results into a ZIP with CSVs
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w") as zf:
         if not df_f.empty:
-            joinpoint_df.to_excel(writer, sheet_name="Joinpoints", index=False)
+            zf.writestr("joinpoints.csv", joinpoint_df.to_csv(index=False))
         if not bf_mat.empty:
-            bf_mat.to_excel(writer, sheet_name="GlobalBF")
+            zf.writestr("global_bayes_factors.csv", bf_mat.to_csv())
         if not bf_n.empty:
-            bf_n.to_excel(writer, sheet_name="NeighborBF")
+            zf.writestr("neighbor_bayes_factors.csv", bf_n.to_csv())
         if not clust_df.empty:
-            clust_df.to_excel(writer, sheet_name="Clusters", index=False)
-        writer.save()
-    buffer.seek(0)
+            zf.writestr("clusters.csv", clust_df.to_csv(index=False))
+    zip_buffer.seek(0)
     st.download_button(
-        label="Download current results as Excel report",
-        data=buffer,
-        file_name="public_health_report.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        label="Download current results report",
+        data=zip_buffer,
+        file_name="public_health_report.zip",
+        mime="application/zip"
     )
 
 if __name__ == "__main__":
