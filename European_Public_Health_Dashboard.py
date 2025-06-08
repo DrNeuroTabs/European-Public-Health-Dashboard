@@ -381,7 +381,7 @@ def forecast_mortality(df_sub: pd.DataFrame, periods: int, method: str, title: s
     st.plotly_chart(fig)
 
 # --------------------------------------------------------------------------
-# NEW: BIC-based Bayes‐factor approximation
+# BIC-based Bayes‐factor approximation
 # --------------------------------------------------------------------------
 def compute_bayes_factor_bic(pair_df: pd.DataFrame, maxlag: int) -> float:
     df_pair = pair_df.dropna()
@@ -555,7 +555,7 @@ def main():
     st.header("Global Bayesian Causality")
     st.markdown(
         "Compare null (Bₜ~1) vs alt (Bₜ~Aₜ₋₁…ₜ₋ₗₐg) by BF₁₀≈exp((BIC₀–BIC₁)/2). "
-        "Heatmap shows log₁₀(BF₁₀), arrows drawn when BF₁₀ ≥ cutoff."
+        "Heatmap shows raw BF₁₀, arrows drawn when BF₁₀ ≥ cutoff."
     )
     country_list = sorted(df["CountryFull"].dropna().unique())
     sel_countries = st.multiselect("Select countries (default: all)",
@@ -579,11 +579,12 @@ def main():
                         if src==dst: continue
                         pair = pivot_gc[[dst, src]]
                         bf_mat.loc[src, dst] = compute_bayes_factor_bic(pair, gl_maxlag)
+            # raw BF heatmap
             fig_hm = px.imshow(
-                np.log10(bf_mat),
+                bf_mat,
                 text_auto=".2f",
-                labels={"x":"Predictor →","y":"Target ↓","color":"log₁₀(BF₁₀)"},
-                title="Global Bayesian Causality (log₁₀ BF₁₀)"
+                labels={"x":"Predictor →","y":"Target ↓","color":"BF₁₀"},
+                title="Global Bayesian Causality (BF₁₀)"
             )
             st.plotly_chart(fig_hm)
 
@@ -594,7 +595,6 @@ def main():
             theta = np.linspace(0,2*np.pi,len(common),endpoint=False)
             pos = {n:(np.cos(t),np.sin(t)) for n,t in zip(common,theta)}
             fig_net = go.Figure()
-            # draw nodes
             xs, ys = zip(*(pos[n] for n in common))
             fig_net.add_trace(go.Scatter(
                 x=xs, y=ys,
@@ -602,7 +602,6 @@ def main():
                 marker=dict(size=20),
                 text=common, textposition="bottom center"
             ))
-            # draw arrows
             for src, dst in edges:
                 x0,y0 = pos[src]; x1,y1 = pos[dst]
                 fig_net.add_annotation(
@@ -618,7 +617,7 @@ def main():
     # --- Neighbor-Based Bayesian Causality ----------------------------------
     st.markdown("---")
     st.header("Neighbor-Based Bayesian Causality")
-    st.markdown("Same BF₁₀ approach, focussed on a focal country and its neighbors.")
+    st.markdown("Same BF₁₀ approach, focused on a focal country and its neighbors.")
     foc_full = st.selectbox("Focal country", country_list, index=country_list.index("Germany"))
     foc_code = REV_COUNTRY_NAME_MAP.get(foc_full, foc_full)
     nbrs = NEIGHBORS.get(foc_code, [])
@@ -645,7 +644,7 @@ def main():
         pivot_n = df_n.pivot_table(index="Year", columns="Country", values="Rate")
         common_n = [c for c in gb if c in pivot_n.columns]
         if len(common_n) >= 2:
-            nbr_lag      = st.slider("Neighbor max lag (yrs)",1,5,2,key="nbr_lag_bf")
+            nbr_lag      = st.slider("Neighbor max lag (yrs)",1,5,2,key="nbr_lag_bf_nbr")
             nbr_bf_cut   = st.number_input("Neighbor BF₁₀ cutoff",1.0,100.0,3.0,0.5,key="nbr_bf_cut")
             bf_n = pd.DataFrame(np.nan, index=common_n, columns=common_n)
             with st.spinner("Computing neighbor Bayes-factors…"):
@@ -654,21 +653,16 @@ def main():
                         if src==dst: continue
                         pair = pivot_n[[dst, src]]
                         bf_n.loc[src,dst] = compute_bayes_factor_bic(pair, nbr_lag)
-            # heatmap
-            names = [COUNTRY_NAME_MAP[c] for c in common_n]
+            # raw BF heatmap
+            names = {c: COUNTRY_NAME_MAP[c] for c in common_n}
             fig_hm_n = px.imshow(
-                np.log10(bf_n.rename(index=dict(zip(common_n,names)),
-                                      columns=dict(zip(common_n,names)))),
+                bf_n.rename(index=names, columns=names),
                 text_auto=".2f",
-                labels={"x":"Predictor →","y":"Target ↓","color":"log₁₀(BF₁₀)"},
-                title="Neighbor-Based Bayesian Heatmap"
+                labels={"x":"Predictor →","y":"Target ↓","color":"BF₁₀"},
+                title="Neighbor-Based Bayesian Heatmap (BF₁₀)"
             )
             st.plotly_chart(fig_hm_n)
-            # network
-            edges_n = [
-                (i,j) for i in common_n for j in common_n
-                if i!=j and pd.notna(bf_n.loc[i,j]) and bf_n.loc[i,j]>=nbr_bf_cut
-            ]
+            # directed neighbor network
             pos_n = {COUNTRY_NAME_MAP[n]:(np.cos(t),np.sin(t))
                      for n,t in zip(common_n, np.linspace(0,2*np.pi,len(common_n),endpoint=False))}
             fig_net_n = go.Figure()
@@ -679,7 +673,10 @@ def main():
                 marker=dict(size=20),
                 text=list(pos_n.keys()), textposition="bottom center"
             ))
-            for src, dst in edges_n:
+            for src, dst in [
+                (i,j) for i in common_n for j in common_n
+                if i!=j and pd.notna(bf_n.loc[i,j]) and bf_n.loc[i,j]>=nbr_bf_cut
+            ]:
                 x0,y0 = pos_n[COUNTRY_NAME_MAP[src]]; x1,y1 = pos_n[COUNTRY_NAME_MAP[dst]]
                 fig_net_n.add_annotation(
                     x=x1, y=y1, ax=x0, ay=y0,
