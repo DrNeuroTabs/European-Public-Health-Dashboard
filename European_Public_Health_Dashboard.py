@@ -4,6 +4,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 from prophet import Prophet
 import ruptures as rpt
 from ruptures.exceptions import BadSegmentationParameters
@@ -135,22 +136,22 @@ CAUSE_NAME_MAP = {
     "N_OTH":"Other genitourinary diseases",
     "O":"Pregnancy, childbirth & puerperium",
     "P":"Perinatal conditions",
-    "Q":"Congenital malformations, deformations & chromosomal abnormalities",
-    "R":"Symptoms & abnormal clinical & laboratory findings",
+    "Q":"Congenital malformations, deformations and chromosomal abnormalities",
+    "R":"Symptoms & abnormal clinical and laboratory findings",
     "R95":"Sudden infant death syndrome",
     "R96-R99":"Ill-defined & unknown causes of mortality",
     "R_OTH":"Other signs & lab findings",
-    "V01-Y89":"External causes of morbidity & mortality",
+    "V01-Y89":"External causes of morbidity and mortality",
     "ACC":"Accidents",
     "V_Y85":"Transport accidents",
     "ACC_OTH":"Other accidents",
     "W00-W19":"Falls",
-    "W65-W74":"Accidental drowning & submersion",
+    "W65-W74":"Accidental drowning and submersion",
     "X60-X84_Y870":"Intentional self-harm",
-    "X40-X49":"Accidental poisoning by & exposure to noxious substances",
+    "X40-X49":"Accidental poisoning by and exposure to noxious substances",
     "X85-Y09_Y871":"Assault",
     "Y10-Y34_Y872":"Event of undetermined intent",
-    "V01-Y89_OTH":"Other external causes of morbidity & mortality",
+    "V01-Y89_OTH":"Other external causes of morbidity and mortality",
     "A-R_V-Y":"All causes (A00-R99 & V01-Y89)",
     "U071":"COVID-19, virus identified",
     "U072":"COVID-19, virus not identified"
@@ -237,16 +238,11 @@ def load_eurostat_series(dataset_id: str) -> pd.DataFrame:
     mask = pd.Series(True, index=long.index)
     if "unit" in dims:
         uv = "RT" if "RT" in long["unit"].unique() else ("NR" if "NR" in long["unit"].unique() else None)
-        if uv:
-            mask &= (long["unit"] == uv)
-    if "freq" in dims:
-        mask &= (long["freq"] == "A")
-    if "age" in dims:
-        mask &= (long["age"] == "TOTAL")
-    if "sex" in dims:
-        mask &= (long["sex"] == "T")
-    if "resid" in dims:
-        mask &= (long["resid"] == "TOT_IN")
+        if uv: mask &= (long["unit"] == uv)
+    if "freq" in dims: mask &= (long["freq"] == "A")
+    if "age" in dims:  mask &= (long["age"] == "TOTAL")
+    if "sex" in dims:  mask &= (long["sex"] == "T")
+    if "resid" in dims:mask &= (long["resid"] == "TOT_IN")
 
     sub = long[mask].copy()
     rename = {"geo": "Region", "sex": "Sex"}
@@ -317,16 +313,21 @@ def compute_joinpoints_and_apc(df_sub: pd.DataFrame) -> pd.DataFrame:
             sy, ey = int(yrs[seg].min()), int(yrs[seg].max())
             sv = vals[seg]
             if len(sv)<2 or np.all(np.isnan(sv)):
-                recs.append({"Sex":SEX_NAME_MAP[sex],"start_year":sy,"end_year":ey,"slope":np.nan,"APC_pct":np.nan})
+                recs.append({"Sex":SEX_NAME_MAP[sex],
+                             "start_year":sy,"end_year":ey,
+                             "slope":np.nan,"APC_pct":np.nan})
             else:
                 slope = sm.OLS(sv, sm.add_constant(yrs[seg])).fit().params[1]
-                apc = (slope/np.nanmean(sv))*100
-                recs.append({"Sex":SEX_NAME_MAP[sex],"start_year":sy,"end_year":ey,"slope":slope,"APC_pct":apc})
+                apc   = (slope/np.nanmean(sv))*100
+                recs.append({"Sex":SEX_NAME_MAP[sex],
+                             "start_year":sy,"end_year":ey,
+                             "slope":slope,"APC_pct":apc})
     return pd.DataFrame(recs)
 
 def plot_joinpoints_comparative(df_sub: pd.DataFrame, title: str):
     df_sub["SexFull"] = df_sub["Sex"].map(SEX_NAME_MAP)
-    fig = px.line(df_sub, x="Year", y="Rate", color="SexFull", title=title, markers=True)
+    fig = px.line(df_sub, x="Year", y="Rate",
+                  color="SexFull", title=title, markers=True)
     st.plotly_chart(fig)
 
 def plot_segmented_fit_series(df_sub: pd.DataFrame, title: str):
@@ -334,7 +335,8 @@ def plot_segmented_fit_series(df_sub: pd.DataFrame, title: str):
     yrs, rates = sub["Year"].values, sub["Rate"].values
     bkps = detect_change_points(rates)[:-1]
     segs = np.split(np.arange(len(yrs)), bkps) if bkps else [np.arange(len(yrs))]
-    fig = go.Figure(); fig.add_trace(go.Scatter(x=yrs, y=rates, mode="markers+lines", name="Data"))
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=yrs, y=rates, mode="markers+lines", name="Data"))
     palette = px.colors.qualitative.Dark24
     for i, seg in enumerate(segs):
         idx, vals = yrs[seg], rates[seg]
@@ -349,20 +351,24 @@ def plot_segmented_fit_series(df_sub: pd.DataFrame, title: str):
 def get_prophet_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     dfp = df_sub[["Year","Rate"]].rename(columns={"Year":"ds","Rate":"y"})
     dfp["ds"] = pd.to_datetime(dfp["ds"].astype(str), format="%Y")
-    m = Prophet(yearly_seasonality=False, daily_seasonality=False); m.fit(dfp)
-    fut = m.make_future_dataframe(periods=periods, freq="Y"); fc = m.predict(fut)
+    m = Prophet(yearly_seasonality=False, daily_seasonality=False)
+    m.fit(dfp)
+    fut = m.make_future_dataframe(periods=periods, freq="Y")
+    fc  = m.predict(fut)
     return pd.DataFrame({"Year": fc["ds"].dt.year, "Prophet": fc["yhat"]})
 
 def get_arima_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     ser = df_sub.set_index("Year")["Rate"]
-    res = ARIMA(ser, order=(1,1,1)).fit(); preds = res.forecast(periods)
+    res = ARIMA(ser, order=(1,1,1)).fit()
+    preds = res.forecast(periods)
     yrs = np.arange(ser.index.max()+1, ser.index.max()+1+periods)
     return pd.DataFrame({"Year": yrs, "ARIMA": preds.values})
 
 def get_ets_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     ser = df_sub.set_index("Year")["Rate"]
     m = ExponentialSmoothing(ser, trend="add", seasonal=None).fit(optimized=True)
-    preds = m.forecast(periods); yrs = np.arange(ser.index.max()+1, ser.index.max()+1+periods)
+    preds = m.forecast(periods)
+    yrs = np.arange(ser.index.max()+1, ser.index.max()+1+periods)
     return pd.DataFrame({"Year": yrs, "ETS": preds.values})
 
 def forecast_mortality(df_sub: pd.DataFrame, periods: int, method: str, title: str):
@@ -396,7 +402,10 @@ def compute_bayes_factor_bic(pair_df: pd.DataFrame, maxlag: int) -> float:
         return np.nan
     target, cause = df_pair.columns
     Y = df_pair[target].values[maxlag:]
-    X_alt = np.column_stack([df_pair[cause].values[maxlag - lag:-lag] for lag in range(1, maxlag + 1)])
+    X_alt = np.column_stack([
+        df_pair[cause].values[maxlag - lag:-lag]
+        for lag in range(1, maxlag + 1)
+    ])
     X_alt = sm.add_constant(X_alt)
     X_null = np.ones((len(Y), 1))
     m0 = sm.OLS(Y, X_null).fit()
@@ -405,19 +414,18 @@ def compute_bayes_factor_bic(pair_df: pd.DataFrame, maxlag: int) -> float:
     return float(np.exp((bic0 - bic1) / 2.0))
 
 # --------------------------------------------------------------------------
-# Helper: draw a directed network with NetworkX + Matplotlib
+# Draw directed network with NetworkX + Matplotlib
 # --------------------------------------------------------------------------
 def draw_directed_network(nodes, edges, title):
     G = nx.DiGraph()
     G.add_nodes_from(nodes)
     G.add_edges_from(edges)
-    # circular layout
     pos = {n: (np.cos(2*np.pi*i/len(nodes)), np.sin(2*np.pi*i/len(nodes)))
-           for i,n in enumerate(nodes)}
+           for i, n in enumerate(nodes)}
     fig, ax = plt.subplots(figsize=(6,6))
     nx.draw_networkx_nodes(G, pos, node_size=500, ax=ax)
     nx.draw_networkx_labels(G, pos, ax=ax)
-    if len(edges) == 0:
+    if not edges:
         ax.set_title(f"{title}\n\n⚠️ No edges above threshold")
     else:
         nx.draw_networkx_edges(
@@ -435,17 +443,17 @@ def draw_directed_network(nodes, edges, title):
 # MAIN APP
 # --------------------------------------------------------------------------
 def main():
-    st.set_page_config(layout="wide", page_title="European Public Health Dashboard")
+    st.set_page_config(layout="wide", page_title="Public Health Dashboard")
     st.title("European Public Health Dashboard")
     st.markdown("by Younes Adam Tabi")
 
-    # --- load & label data (unchanged) ---
+    # Load & label mortality data
     df = load_data()
     df["CountryFull"] = df["Country"].map(COUNTRY_NAME_MAP)
     df["CauseFull"]   = df["Cause"].map(CAUSE_NAME_MAP)
     df["SexFull"]     = df["Sex"].map(SEX_NAME_MAP)
 
-    # --- sidebar filters (unchanged) ---
+    # Sidebar controls
     countries    = sorted(df["CountryFull"].dropna().unique())
     country_full = st.sidebar.selectbox("Country", countries,
                                         index=countries.index("European Union"))
@@ -462,7 +470,7 @@ def main():
     method       = st.sidebar.selectbox("Forecast Method",
                                         ["Prophet","ARIMA","ETS","Ensemble"])
 
-    # --- mortality trends & forecasts (unchanged) ---
+    # Mortality trends & forecasts
     st.header(f"{cause_full} in {country_full} ({year_range[0]}–{year_range[1]})")
     df_f = df[
         (df["Country"]==country_code) &
@@ -474,7 +482,7 @@ def main():
         st.warning("No data for selected filters.")
     else:
         st.markdown("### Joinpoint Trend")
-        plot_joinpoints_comparative(df_f, f"{cause_full} Trend")
+        plot_joinpoints_comparative(df_f, f"{cause_full} Trend by Sex")
         st.markdown("### Segmented Linear Fits")
         for sc, sf in zip(sex_codes, sex_sel):
             plot_segmented_fit_series(df_f[df_f["Sex"]==sc], f"{cause_full} ({sf}) Fit")
@@ -485,14 +493,17 @@ def main():
             forecast_mortality(df_f[df_f["Sex"]==sc], forecast_yrs, method,
                                f"{cause_full} ({sf}) Forecast")
 
-    # --- health-factor regression (unchanged) ---
+    # Health-factor regression
     st.markdown("---")
     st.header("Health Factors – Exploratory Panel Regression")
     factors = st.multiselect("Select health factors", list(FACTOR_IDS.keys()))
     if factors:
         reg_min, reg_max = st.slider(
-            "Regression Years", year_range[0], year_range[1],
-            (year_range[0], year_range[1]), help="Select at least 3 years"
+            "Regression Years",
+            min_value=year_range[0],
+            max_value=year_range[1],
+            value=(year_range[0], year_range[1]),
+            help="Select at least 3 years"
         )
         if (reg_max - reg_min) < 3:
             st.warning("Please select at least 3 years for the regression.")
@@ -503,7 +514,7 @@ def main():
                 (all_f["Year"].between(reg_min, reg_max)) &
                 (all_f["Sex"].isin(sex_codes))
             ]
-            pmort = df[
+            pm = df[
                 (df["Cause"]==cause_code) &
                 (df["Year"].between(reg_min, reg_max)) &
                 (df["Sex"].isin(sex_codes))
@@ -512,7 +523,7 @@ def main():
                 index=["Country","Year"],
                 columns="FactorName",
                 values="Rate"
-            ).reset_index().merge(pmort, on=["Country","Year"], how="inner")
+            ).reset_index().merge(pm, on=["Country","Year"], how="inner")
             present = [f for f in factors if f in panel.columns]
             missing = set(factors) - set(present)
             if missing:
@@ -522,9 +533,9 @@ def main():
                 panel_clean = panel.dropna(subset=present+["Mortality"])
                 dropped = before - panel_clean.shape[0]
                 if dropped>0:
-                    st.warning(f"Dropped {dropped} obs due to missing data.")
+                    st.warning(f"Dropped {dropped} observations due to missing data.")
                 if panel_clean.shape[0] < len(present)*2:
-                    st.warning("Not enough data for reliable regression.")
+                    st.warning("Not enough observations for reliable regression after dropping missing data.")
                 else:
                     X = sm.add_constant(panel_clean[present])
                     y = panel_clean["Mortality"]
@@ -541,125 +552,81 @@ def main():
                         )
                     )
 
-    # --- cluster analysis (unchanged) ---
+    # Cluster analysis
     st.markdown("---")
     st.header("Cluster Analysis (Total Rates)")
     df_cl = df[(df["Cause"]==cause_code)&(df["Sex"]=="T")&(df["Year"].between(*year_range))]
     pivot = df_cl.pivot(index="Country", columns="Year", values="Rate")
-    pivot = (pivot.interpolate(axis=1, limit_direction="both")
-             .ffill(axis=1).bfill(axis=1).dropna(axis=0, how="all"))
+    pivot = pivot.interpolate(axis=1, limit_direction="both").ffill(axis=1).bfill(axis=1).dropna(axis=0, how="all")
     if pivot.shape[0] < 3:
         st.warning("Not enough total-rate countries to cluster.")
     else:
         X = pivot.values
         max_k = min(10, X.shape[0]-1)
-        sil_scores = {
-            k: silhouette_score(X, KMeans(n_clusters=k, random_state=0)
-                               .fit_predict(X))
-            for k in range(2, max_k+1)
-        }
+        sil_scores = {k: silhouette_score(X, KMeans(n_clusters=k, random_state=0).fit_predict(X))
+                      for k in range(2, max_k+1)}
         sil_df = pd.Series(sil_scores, name="silhouette_score").to_frame()
         st.write("Silhouette by # clusters:", sil_df)
         st.plotly_chart(px.line(sil_df, x=sil_df.index, y="silhouette_score",
-                                labels={"index":"# clusters"},
-                                title="Silhouette vs # Clusters"))
+                                labels={"index":"# clusters"}, title="Silhouette vs # Clusters"))
         best_k = max(sil_scores, key=sil_scores.get)
         st.write(f"Optimal k: **{best_k}**")
         km = KMeans(n_clusters=best_k, random_state=0).fit(X)
-        clust_df = pd.DataFrame(
-            {"Country": pivot.index, "Cluster": km.labels_.astype(str)}
-        )
+        clust_df = pd.DataFrame({"Country": pivot.index, "Cluster": km.labels_.astype(str)})
         clust_df["CountryFull"] = clust_df["Country"].map(COUNTRY_NAME_MAP)
         clust_df["iso_alpha"]   = clust_df["Country"].apply(alpha3_from_a2)
-        st.plotly_chart(px.choropleth(
-            clust_df, locations="iso_alpha", color="Cluster",
-            hover_name="CountryFull", locationmode="ISO-3",
-            scope="europe", title=f"{cause_full} Clusters (k={best_k})"
-        ))
+        st.plotly_chart(px.choropleth(clust_df, locations="iso_alpha", color="Cluster",
+                                      hover_name="CountryFull", locationmode="ISO-3",
+                                      scope="europe", title=f"{cause_full} Clusters (k={best_k})"))
 
-    # --- Global Bayesian Causality with NetworkX arrows ---------------
+    # Global Bayesian causality
     st.markdown("---")
     st.header("Global Bayesian Causality")
-    st.markdown(
-        "Compare null (Bₜ~1) vs alt (Bₜ~Aₜ₋₁…ₜ₋ₗₐg) by BF₁₀≈exp((BIC₀–BIC₁)/2). "
-        "Directed arrows show BF₁₀ ≥ cutoff."
-    )
+    st.markdown("Directed arrows show BF₁₀ ≥ cutoff (via NetworkX).")
     country_list = sorted(df["CountryFull"].dropna().unique())
-    sel_countries = st.multiselect(
-        "Select countries (default: all)", country_list, default=country_list
-    )
+    sel_countries = st.multiselect("Select countries (default: all)", country_list, default=country_list)
     gl_maxlag = st.slider("Global max lag (yrs)", 1, 5, 2, key="gl_maxlag")
     bf_thresh = st.number_input("BF₁₀ cutoff", 1.0, 100.0, 3.0, 0.5, key="bf_thresh")
 
     if len(sel_countries) >= 2:
-        df_g = df[
-            (df["Cause"]==cause_code)&
-            (df["CountryFull"].isin(sel_countries))&
-            (df["Sex"]=="T")&
-            (df["Year"].between(*year_range))
-        ]
-        pivot_gc = df_g.pivot_table(
-            index="Year", columns="CountryFull", values="Rate"
-        )
+        df_g = df[(df["Cause"]==cause_code)&(df["CountryFull"].isin(sel_countries))&(df["Sex"]=="T")&(df["Year"].between(*year_range))]
+        pivot_gc = df_g.pivot_table(index="Year", columns="CountryFull", values="Rate")
         common = [c for c in sel_countries if c in pivot_gc.columns]
 
-        # compute BF matrix
         bf_mat = pd.DataFrame(np.nan, index=common, columns=common)
         for src in common:
             for dst in common:
-                if src == dst:
-                    continue
+                if src == dst: continue
                 pair = pivot_gc[[dst, src]].dropna()
                 if pair.shape[0] >= gl_maxlag + 3:
                     bf_mat.loc[src, dst] = compute_bayes_factor_bic(pair, gl_maxlag)
 
-        # build edge list
-        edges = [
-            (src, dst)
-            for src in common for dst in common
-            if src != dst
-            and pd.notna(bf_mat.loc[src, dst])
-            and bf_mat.loc[src, dst] >= bf_thresh
-        ]
-
-        # show BF matrix
         st.subheader("Bayes-factor matrix")
         st.dataframe(bf_mat.style.format("{:.2f}"))
 
-        # draw with NetworkX
+        edges = [(src, dst) for src in common for dst in common
+                 if src != dst and pd.notna(bf_mat.loc[src, dst]) and bf_mat.loc[src, dst] >= bf_thresh]
+
         draw_directed_network(common, edges, f"Global Network (BF₁₀ ≥ {bf_thresh})")
 
-    # --- Neighbor-Based Bayesian Causality with NetworkX arrows -------
+    # Neighbor-based Bayesian causality
     st.markdown("---")
     st.header("Neighbor-Based Bayesian Causality")
-    st.markdown("Same BF₁₀ approach, for one focal country + its neighbors.")
-    foc_full = st.selectbox("Focal country", country_list,
-                            index=country_list.index("Germany"))
+    st.markdown("Directed arrows show BF₁₀ ≥ cutoff (via NetworkX).")
+    foc_full = st.selectbox("Focal country", country_list, index=country_list.index("Germany"))
     foc_code = REV_COUNTRY_NAME_MAP.get(foc_full, foc_full)
     nbrs = NEIGHBORS.get(foc_code, [])
-    map_df = pd.DataFrame({
-        "Country": [foc_code] + nbrs,
-        "Role":    ["Focal"] + ["Neighbor"] * len(nbrs)
-    })
+    map_df = pd.DataFrame({"Country":[foc_code]+nbrs, "Role":["Focal"]+["Neighbor"]*len(nbrs)})
     map_df["CountryFull"] = map_df["Country"].map(COUNTRY_NAME_MAP)
     map_df["iso_alpha"]   = map_df["Country"].apply(alpha3_from_a2)
-    st.plotly_chart(px.choropleth(
-        map_df, locations="iso_alpha", color="Role",
-        hover_name="CountryFull", locationmode="ISO-3",
-        scope="europe", title="Focal & Neighbors"
-    ))
+    st.plotly_chart(px.choropleth(map_df, locations="iso_alpha", color="Role",
+                                  hover_name="CountryFull", locationmode="ISO-3",
+                                  scope="europe", title="Focal & Neighbors"))
 
     if nbrs:
         gb = [foc_code] + nbrs
-        df_n = df[
-            (df["Cause"]==cause_code)&
-            (df["Country"].isin(gb))&
-            (df["Sex"]=="T")&
-            (df["Year"].between(*year_range))
-        ]
-        pivot_n = df_n.pivot_table(
-            index="Year", columns="Country", values="Rate"
-        )
+        df_n = df[(df["Cause"]==cause_code)&(df["Country"].isin(gb))&(df["Sex"]=="T")&(df["Year"].between(*year_range))]
+        pivot_n = df_n.pivot_table(index="Year", columns="Country", values="Rate")
         common_n = [c for c in gb if c in pivot_n.columns]
 
         nbr_lag    = st.slider("Neighbor max lag (yrs)", 1, 5, 2, key="nbr_lag")
@@ -668,32 +635,25 @@ def main():
         bf_n = pd.DataFrame(np.nan, index=common_n, columns=common_n)
         for src in common_n:
             for dst in common_n:
-                if src == dst:
-                    continue
+                if src == dst: continue
                 pair = pivot_n[[dst, src]].dropna()
                 if pair.shape[0] >= nbr_lag + 3:
                     bf_n.loc[src, dst] = compute_bayes_factor_bic(pair, nbr_lag)
 
-        edges_n = [
-            (src, dst)
-            for src in common_n for dst in common_n
-            if src != dst
-            and pd.notna(bf_n.loc[src, dst])
-            and bf_n.loc[src, dst] >= nbr_bf_cut
-        ]
-
         st.subheader("Neighbor Bayes-factor matrix")
         st.dataframe(bf_n.style.format("{:.2f}"))
 
-        # map country codes to full names for plotting
+        edges_n = [(src, dst) for src in common_n for dst in common_n
+                   if src != dst and pd.notna(bf_n.loc[src, dst]) and bf_n.loc[src, dst] >= nbr_bf_cut]
+
         nodes_n = [COUNTRY_NAME_MAP[c] for c in common_n]
         edges_n_full = [(COUNTRY_NAME_MAP[s], COUNTRY_NAME_MAP[d]) for s,d in edges_n]
 
-        draw_directed_network(nodes_n, edges_n_full,
-                              f"Neighbor Network (BF₁₀ ≥ {nbr_bf_cut})")
+        draw_directed_network(nodes_n, edges_n_full, f"Neighbor Network (BF₁₀ ≥ {nbr_bf_cut})")
 
     st.markdown("---")
-    st.info("You can adjust the BF₁₀ cutoffs on the sliders above.  If no edges appear, you'll get a ⚠️ message.")
+    st.info("Adjust BF₁₀ cutoffs via sliders.  If no edges appear, threshold is too high or data insufficient.")
 
 if __name__ == "__main__":
     main()
+
