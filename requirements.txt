@@ -9,5 +9,3 @@ statsmodels
 pycountry
 icd10-cm
 pmdarima
-pymc3>=3.11
-arviz>=0.15
