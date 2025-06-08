@@ -338,7 +338,7 @@ def compute_bayes_factor_bic(pair_df:pd.DataFrame,maxlag:int)->float:
     return float(np.exp((m0.bic-m1.bic)/2.0))
 
 # --------------------------------------------------------------------------
-# DRAW DIRECTED NETWORK (edges under nodes + radial outward labels)
+# DRAW DIRECTED NETWORK (edges under nodes + labels further out + title up)
 # --------------------------------------------------------------------------
 def draw_directed_network(nodes, edges, title):
     G = nx.DiGraph()
@@ -360,13 +360,17 @@ def draw_directed_network(nodes, edges, title):
                                connectionstyle="arc3,rad=0.1")
 
     # draw nodes on top
-    nx.draw_networkx_nodes(G, pos, node_size=500, node_color='skyblue', ax=ax)
+    nx.draw_networkx_nodes(G, pos,
+                           node_size=500,
+                           node_color='skyblue',
+                           ax=ax)
 
-    # radial labels: push left side further out, title higher
+    # radial labels: push left side further out, and right side further out as well
     for i, node in enumerate(nodes):
         angle = angles[i]
         cosv  = np.cos(angle)
-        rad   = 1.3 if cosv >= 0 else 1.5
+        # increase radius for both sides
+        rad   = 1.5 if cosv >= 0 else 1.7
         x, y  = np.cos(angle)*rad, np.sin(angle)*rad
         deg   = np.degrees(angle)
         ha    = "left" if cosv > 0 else "right"
@@ -379,7 +383,8 @@ def draw_directed_network(nodes, edges, title):
                 bbox=dict(facecolor='white', edgecolor='none', pad=0.3),
                 zorder=3)
 
-    ax.set_title(title, y=1.08, pad=20)
+    # move title further up
+    ax.set_title(title, y=1.12, pad=20)
     ax.set_axis_off()
     st.pyplot(fig)
 
@@ -605,7 +610,7 @@ def main():
         draw_directed_network(nodes_n, edges_n, f"Neighbor Network (BF₁₀ ≥ {nbr_bf})")
 
     st.markdown("---")
-    st.info("Edges drawn under nodes; labels on left pushed further out; titles raised to avoid overlap.")
+    st.info("Labels pushed further out (radius 1.7 left, 1.5 right); titles moved up to y=1.12; edges under nodes.")
 
 if __name__=="__main__":
     main()
