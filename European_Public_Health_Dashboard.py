@@ -362,14 +362,15 @@ def draw_directed_network(nodes, edges, title):
     # draw nodes on top
     nx.draw_networkx_nodes(G, pos, node_size=500, node_color='skyblue', ax=ax)
 
-    # radial labels at radius 1.3, rotated outward
-    radius = 1.3
+    # radial labels: push left side further out, title higher
     for i, node in enumerate(nodes):
         angle = angles[i]
-        x, y = np.cos(angle)*radius, np.sin(angle)*radius
-        deg = np.degrees(angle)
-        ha = "left" if np.cos(angle) > 0 else "right"
-        va = "bottom" if np.sin(angle) > 0 else "top"
+        cosv  = np.cos(angle)
+        rad   = 1.3 if cosv >= 0 else 1.5
+        x, y  = np.cos(angle)*rad, np.sin(angle)*rad
+        deg   = np.degrees(angle)
+        ha    = "left" if cosv > 0 else "right"
+        va    = "bottom" if np.sin(angle) > 0 else "top"
         ax.text(x, y, node,
                 ha=ha, va=va,
                 rotation=deg,
@@ -378,7 +379,7 @@ def draw_directed_network(nodes, edges, title):
                 bbox=dict(facecolor='white', edgecolor='none', pad=0.3),
                 zorder=3)
 
-    ax.set_title(title, pad=20)
+    ax.set_title(title, y=1.08, pad=20)
     ax.set_axis_off()
     st.pyplot(fig)
 
@@ -604,7 +605,7 @@ def main():
         draw_directed_network(nodes_n, edges_n, f"Neighbor Network (BF₁₀ ≥ {nbr_bf})")
 
     st.markdown("---")
-    st.info("Full script with edges under nodes, labels radially outward at radius 1.3, and all prior functionality integrated.")
+    st.info("Edges drawn under nodes; labels on left pushed further out; titles raised to avoid overlap.")
 
 if __name__=="__main__":
     main()
