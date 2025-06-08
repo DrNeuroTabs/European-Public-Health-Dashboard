@@ -9,3 +9,5 @@ statsmodels
 pycountry
 icd10-cm
 pmdarima
+networkx
+matplotlib
