@@ -417,7 +417,7 @@ def draw_directed_network(nodes, edges, title):
     st.pyplot(fig)
 
 def main():
-    st.set_page_config(layout="wide", page_title="European Public Health Dashboard")
+    st.set_page_config(layout="wide", page_title="European Public Health Dashboard", page_icon="./EU_HealthBoard.ico")
     st.title("European Public Health Dashboard"); st.markdown("by Younes Adam Tabi")
 
     df = load_data()
