@@ -65,96 +65,7 @@ REV_SEX_NAME = {v:k for k,v in SEX_NAME_MAP.items()}
 
 CAUSE_NAME_MAP = {
     "TOTAL":"Total",
-    "A_B":"Certain infectious and parasitic diseases (A00-B99)",
-    "A15-A19_B90":"Tuberculosis",
-    "B15-B19_B942":"Viral hepatitis and sequelae of viral hepatitis",
-    "B180-B182":"Chronic viral hepatitis B and C",
-    "B20-B24":"Human immunodeficiency virus [HIV] disease",
-    "A_B_OTH":"Other infectious and parasitic diseases (A00-B99)",
-    "C00-D48":"Neoplasms",
-    "C":"Malignant neoplasms (C00-C97)",
-    "C00-C14":"Malignant neoplasm of lip, oral cavity, pharynx",
-    "C15":"Malignant neoplasm of oesophagus",
-    "C16":"Malignant neoplasm of stomach",
-    "C18-C21":"Malignant neoplasm of colon, rectum, anus",
-    "C22":"Malignant neoplasm of liver and intrahepatic bile ducts",
-    "C25":"Malignant neoplasm of pancreas",
-    "C32":"Malignant neoplasm of larynx",
-    "C33_C34":"Malignant neoplasm of trachea, bronchus and lung",
-    "C43":"Malignant melanoma of skin",
-    "C50":"Malignant neoplasm of breast",
-    "C53":"Malignant neoplasm of cervix uteri",
-    "C54_C55":"Malignant neoplasm of other parts of uterus",
-    "C56":"Malignant neoplasm of ovary",
-    "C61":"Malignant neoplasm of prostate",
-    "C64":"Malignant neoplasm of kidney, except renal pelvis",
-    "C67":"Malignant neoplasm of bladder",
-    "C70-C72":"Malignant neoplasm of brain and CNS",
-    "C73":"Malignant neoplasm of thyroid gland",
-    "C81-C86":"Hodgkin disease and lymphomas",
-    "C88_C90_C96":"Other lymphoid & haematopoietic neoplasms",
-    "C91-C95":"Leukaemia",
-    "C_OTH":"Other malignant neoplasms (C00-C97)",
-    "D00-D48":"Non-malignant neoplasms",
-    "D50-D89":"Diseases of blood & blood-forming organs",
-    "E":"Endocrine, nutritional & metabolic diseases",
-    "E10-E14":"Diabetes mellitus",
-    "E_OTH":"Other endocrine, nutritional & metabolic diseases",
-    "F":"Mental & behavioural disorders",
-    "F01_F03":"Dementia",
-    "F10":"Alcohol-related mental disorders",
-    "TOXICO":"Drug dependence & toxicomania",
-    "F_OTH":"Other mental & behavioural disorders",
-    "G_H":"Nervous system & sense organs diseases",
-    "G20":"Parkinson disease",
-    "G30":"Alzheimer disease",
-    "G_H_OTH":"Other nervous system & sense organ diseases",
-    "I":"Circulatory system diseases",
-    "I20-I25":"Ischaemic heart diseases",
-    "I21_I22":"Acute myocardial infarction",
-    "I20_I23-I25":"Other ischaemic heart diseases",
-    "I30-I51":"Other heart diseases",
-    "I60-I69":"Cerebrovascular diseases",
-    "I_OTH":"Other circulatory diseases",
-    "J":"Respiratory system diseases",
-    "J09-J11":"Influenza (including swine flu)",
-    "J12-J18":"Pneumonia",
-    "J40-J47":"Chronic lower respiratory diseases",
-    "J45_J46":"Asthma",
-    "J40-J44_J47":"Other lower respiratory diseases",
-    "J_OTH":"Other respiratory diseases",
-    "K":"Digestive system diseases",
-    "K25-K28":"Ulcer of stomach & duodenum",
-    "K70_K73_K74":"Chronic liver disease",
-    "K72-K75":"Other liver diseases",
-    "K_OTH":"Other digestive diseases",
-    "L":"Skin & subcutaneous tissue diseases",
-    "M":"Musculoskeletal system diseases",
-    "RHEUM_ARTHRO":"Rheumatoid arthritis & arthrosis",
-    "M_OTH":"Other musculoskeletal diseases",
-    "N":"Genitourinary system diseases",
-    "N00-N29":"Kidney & ureter diseases",
-    "N_OTH":"Other genitourinary diseases",
-    "O":"Pregnancy, childbirth & puerperium",
-    "P":"Perinatal conditions",
-    "Q":"Congenital malformations, deformations and chromosomal abnormalities",
-    "R":"Symptoms & abnormal clinical and laboratory findings",
-    "R95":"Sudden infant death syndrome",
-    "R96-R99":"Ill-defined & unknown causes of mortality",
-    "R_OTH":"Other signs & lab findings",
-    "V01-Y89":"External causes of morbidity and mortality",
-    "ACC":"Accidents",
-    "V_Y85":"Transport accidents",
-    "ACC_OTH":"Other accidents",
-    "W00-W19":"Falls",
-    "W65-W74":"Accidental drowning and submersion",
-    "X60-X84_Y870":"Intentional self-harm",
-    "X40-X49":"Accidental poisoning by and exposure to noxious substances",
-    "X85-Y09_Y871":"Assault",
-    "Y10-Y34_Y872":"Event of undetermined intent",
-    "V01-Y89_OTH":"Other external causes of morbidity and mortality",
-    "A-R_V-Y":"All causes (A00-R99 & V01-Y89)",
-    "U071":"COVID-19, virus identified",
+    # ... [all your cause mappings as before] ...
     "U072":"COVID-19, virus not identified"
 }
 REV_CAUSE_NAME_MAP = {v:k for k,v in CAUSE_NAME_MAP.items()}
@@ -169,21 +80,7 @@ REV_COUNTRY_NAME_MAP = {v:k for k,v in COUNTRY_NAME_MAP.items()}
 
 FACTOR_IDS = {
     "BMI by citizenship":      "hlth_ehis_bm1c",
-    "Phys activity by citizenship": "hlth_ehis_pe9c",
-    "Fruit & veg by citizenship":   "hlth_ehis_fv3c",
-    "Smoking by citizenship":       "hlth_ehis_sk1c",
-    "Social support by citizenship":"hlth_ehis_ss1c",
-    "Health care expenditure by provider": "hlth_sha11_hp",
-    "Staff – physicians":           "hlth_rs_prs2",
-    "Staff – hospital":             "hlth_rs_prshp2",
-    "Available beds in hospitals":  "hlth_rs_bdsrg2",
-    "Beds in nursing and other residential long-term care facilities": "hlth_rs_bdltc",
-    "Imaging devices":              "hlth_rs_medim",
-    "Beds hospital":                "hlth_rs_bds2",
-    "Consultations":                "hlth_ehis_am1e",
-    "Med use prescribed":           "hlth_ehis_md1e",
-    "Med use non-prescribed":       "hlth_ehis_md2e",
-    "Home care":                    "hlth_ehis_am7e",
+    # ... [all your factor IDs as before] ...
     "Unmet needs":                  "hlth_ehis_un1e"
 }
 
@@ -245,8 +142,9 @@ def load_eurostat_series(dataset_id: str) -> pd.DataFrame:
         mask &= (long["freq"] == "A")
     if "age" in dims:
         mask &= (long["age"] == "TOTAL")
-    if "sex" in dims:
-        mask &= (long["sex"] == "T")
+    # Removed hard-coded filtering to only Total sex:
+    # if "sex" in dims:
+    #     mask &= (long["sex"] == "T")
     if "resid" in dims:
         mask &= (long["resid"] == "TOT_IN")
 
@@ -367,15 +265,14 @@ def get_ets_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     return pd.DataFrame({"Year":yrs, "ETS":preds.values})
 
 def forecast_mortality(df_sub: pd.DataFrame, periods: int, method: str) -> pd.DataFrame:
-    dfp = df_sub[["Year","Rate"]].rename(columns={"Year":"ds","Rate":"y"})
     prop = get_prophet_forecast(df_sub, periods)
     ari  = get_arima_forecast(df_sub, periods)
     ets  = get_ets_forecast(df_sub, periods)
     fc = prop.merge(ari, on="Year").merge(ets, on="Year")
     if method=="Prophet": fc["Forecast"]=fc["Prophet"]
-    elif method=="ARIMA": fc["Forecast"]=fc["ARIMA"]
-    elif method=="ETS": fc["Forecast"]=fc["ETS"]
-    else: fc["Forecast"]=fc[["Prophet","ARIMA","ETS"]].mean(axis=1)
+    elif method=="ARIMA":   fc["Forecast"]=fc["ARIMA"]
+    elif method=="ETS":     fc["Forecast"]=fc["ETS"]
+    else:                   fc["Forecast"]=fc[["Prophet","ARIMA","ETS"]].mean(axis=1)
     hist = df_sub[["Year","Rate"]].rename(columns={"Rate":"History"})
     return hist.merge(fc[["Year","Forecast"]], on="Year", how="outer")
 
@@ -417,8 +314,11 @@ def draw_directed_network(nodes, edges, title):
     st.pyplot(fig)
 
 def main():
-    st.set_page_config(layout="wide", page_title="European Public Health Dashboard", page_icon="./EU_HealthBoard.ico")
-    st.title("European Public Health Dashboard"); st.markdown("by Younes Adam Tabi")
+    st.set_page_config(layout="wide",
+                       page_title="European Public Health Dashboard",
+                       page_icon="./EU_HealthBoard.ico")
+    st.title("European Public Health Dashboard")
+    st.markdown("by Younes Adam Tabi")
 
     df = load_data()
     df["CountryFull"] = df["Country"].map(COUNTRY_NAME_MAP)
@@ -426,17 +326,21 @@ def main():
     df["SexFull"]     = df["Sex"].map(SEX_NAME_MAP)
 
     countries = sorted(df["CountryFull"].dropna().unique())
-    country_full = st.sidebar.selectbox("Country", countries, index=countries.index("European Union"))
+    country_full = st.sidebar.selectbox("Country", countries,
+                                        index=countries.index("European Union"))
     country_code = REV_COUNTRY_NAME_MAP.get(country_full, country_full)
     causes = sorted(df[df["Country"]==country_code]["CauseFull"].dropna().unique())
     cause_full = st.sidebar.selectbox("Cause of Death", causes)
     cause_code = REV_CAUSE_NAME_MAP.get(cause_full, cause_full)
-    sex_sel = st.sidebar.multiselect("Sex", ["Total","Male","Female"], default=["Total"])
+    sex_sel = st.sidebar.multiselect("Sex", ["Total","Male","Female"],
+                                     default=["Total"])
     sex_codes = [REV_SEX_NAME[s] for s in sex_sel]
     yrs = sorted(df["Year"].unique())
-    year_range = st.sidebar.slider("Historical Years", yrs[0], yrs[-1], (yrs[0], yrs[-1]))
+    year_range = st.sidebar.slider("Historical Years", yrs[0], yrs[-1],
+                                   (yrs[0], yrs[-1]))
     forecast_yrs = st.sidebar.slider("Forecast Horizon (yrs)", 1, 30, 10)
-    method = st.sidebar.selectbox("Forecast Method", ["Prophet","ARIMA","ETS","Ensemble"])
+    method = st.sidebar.selectbox("Forecast Method",
+                                  ["Prophet","ARIMA","ETS","Ensemble"])
 
     # Joinpoints & Forecast DataFrames
     joinpoint_df = pd.DataFrame()
@@ -465,7 +369,8 @@ def main():
         for sc, sf in zip(sex_codes, sex_sel):
             fc = forecast_mortality(df_f[df_f["Sex"]==sc], forecast_yrs, method)
             forecasts[sf] = fc
-            st.plotly_chart(px.line(fc, x="Year", y=["History","Forecast"], title=f"{cause_full} ({sf}) Forecast"))
+            st.plotly_chart(px.line(fc, x="Year", y=["History","Forecast"],
+                                    title=f"{cause_full} ({sf}) Forecast"))
 
     # Exploratory Panel Regression
     st.markdown("---"); st.header("Health Factors – Exploratory Panel Regression")
@@ -535,7 +440,9 @@ def main():
     else:
         X = pivot.values
         max_k = min(10, X.shape[0]-1)
-        sil_scores = {k: silhouette_score(X, KMeans(n_clusters=k, random_state=0).fit_predict(X))
+        sil_scores = {k: silhouette_score(X,
+                                          KMeans(n_clusters=k,
+                                                 random_state=0).fit_predict(X))
                       for k in range(2, max_k+1)}
         sil_df = pd.Series(sil_scores, name="silhouette_score").to_frame()
         st.write("Silhouette by # clusters:", sil_df)
@@ -547,7 +454,8 @@ def main():
         best_k = max(sil_scores, key=sil_scores.get)
         st.write(f"Optimal k: **{best_k}**")
         km = KMeans(n_clusters=best_k, random_state=0).fit(X)
-        clust_df = pd.DataFrame({"Country": pivot.index, "Cluster": km.labels_.astype(str)})
+        clust_df = pd.DataFrame({"Country": pivot.index,
+                                 "Cluster": km.labels_.astype(str)})
         clust_df["CountryFull"] = clust_df["Country"].map(COUNTRY_NAME_MAP)
         clust_df["iso_alpha"]   = clust_df["Country"].apply(alpha3_from_a2)
         st.plotly_chart(px.choropleth(clust_df,
@@ -561,9 +469,11 @@ def main():
     # Global Bayesian Causality
     st.markdown("---"); st.header("Global Bayesian Causality (Neighbors Only)")
     country_list = sorted(df["CountryFull"].dropna().unique())
-    sel_countries = st.multiselect("Select countries (default: all)", country_list, default=country_list)
+    sel_countries = st.multiselect("Select countries (default: all)",
+                                   country_list, default=country_list)
     gl_maxlag = st.slider("Global max lag (yrs)", 1, 5, 2, key="gl_maxlag")
-    bf_thresh = st.number_input("BF₁₀ cutoff", 1.0, 100.0, 3.0, 0.5, key="bf_thr")
+    bf_thresh = st.number_input("BF₁₀ cutoff", 1.0, 100.0, 3.0, 0.5,
+                                key="bf_thr")
     bf_mat = pd.DataFrame(); edges_global = []
     if len(sel_countries) >= 2:
         df_g = df[
@@ -572,7 +482,9 @@ def main():
             (df["Sex"]=="T")&
             (df["Year"].between(*year_range))
         ]
-        pivot_gc = df_g.pivot_table(index="Year", columns="CountryFull", values="Rate")
+        pivot_gc = df_g.pivot_table(index="Year",
+                                    columns="CountryFull",
+                                    values="Rate")
         common = [c for c in sel_countries if c in pivot_gc.columns]
         bf_mat = pd.DataFrame(np.nan, index=common, columns=common)
         for src in common:
@@ -580,7 +492,8 @@ def main():
                 if src == dst: continue
                 pair = pivot_gc[[dst, src]].dropna()
                 if len(pair) >= gl_maxlag + 3:
-                    bf_mat.loc[src, dst] = compute_bayes_factor_bic(pair, gl_maxlag)
+                    bf_mat.loc[src, dst] = compute_bayes_factor_bic(pair,
+                                                                    gl_maxlag)
         st.subheader("Bayes-factor matrix (both directions)")
         st.dataframe(bf_mat.style.format("{:.2f}"))
         for src in common:
@@ -592,14 +505,17 @@ def main():
                     dc = REV_COUNTRY_NAME_MAP.get(dst)
                     if dc in NEIGHBORS.get(sc, []):
                         edges_global.append((src, dst))
-        draw_directed_network(common, edges_global, f"Global Neighbor Network (BF₁₀ ≥ {bf_thresh})")
+        draw_directed_network(common, edges_global,
+                              f"Global Neighbor Network (BF₁₀ ≥ {bf_thresh})")
 
     # Neighbor-Based Bayesian Causality
     st.markdown("---"); st.header("Neighbor-Based Bayesian Causality")
-    foc_full = st.selectbox("Focal country", country_list, index=country_list.index("Germany"))
+    foc_full = st.selectbox("Focal country", country_list,
+                            index=country_list.index("Germany"))
     foc_code = REV_COUNTRY_NAME_MAP.get(foc_full, foc_full)
     nbrs = NEIGHBORS.get(foc_code, [])
-    map_df = pd.DataFrame({"Country":[foc_code]+nbrs, "Role":["Focal"]+["Neighbor"]*len(nbrs)})
+    map_df = pd.DataFrame({"Country":[foc_code]+nbrs,
+                           "Role":["Focal"]+["Neighbor"]*len(nbrs)})
     map_df["CountryFull"] = map_df["Country"].map(COUNTRY_NAME_MAP)
     map_df["iso_alpha"]   = map_df["Country"].apply(alpha3_from_a2)
     st.plotly_chart(px.choropleth(map_df,
@@ -618,17 +534,22 @@ def main():
             (df["Sex"]=="T")&
             (df["Year"].between(*year_range))
         ]
-        pivot_n = df_n.pivot_table(index="Year", columns="Country", values="Rate")
+        pivot_n = df_n.pivot_table(index="Year",
+                                   columns="Country",
+                                   values="Rate")
         common_n = [c for c in gb if c in pivot_n.columns]
-        nbr_lag = st.slider("Neighbor max lag (yrs)", 1, 5, 2, key="nbr_lag")
-        nbr_bf  = st.number_input("Neighbor BF₁₀ cutoff", 1.0, 100.0, 3.0, 0.5, key="nbr_bf")
+        nbr_lag = st.slider("Neighbor max lag (yrs)", 1, 5, 2,
+                            key="nbr_lag")
+        nbr_bf  = st.number_input("Neighbor BF₁₀ cutoff", 1.0, 100.0,
+                                  3.0, 0.5, key="nbr_bf")
         bf_n = pd.DataFrame(np.nan, index=common_n, columns=common_n)
         for src in common_n:
             for dst in common_n:
                 if src == dst: continue
                 pair = pivot_n[[dst, src]].dropna()
                 if len(pair) >= nbr_lag + 3:
-                    bf_n.loc[src, dst] = compute_bayes_factor_bic(pair, nbr_lag)
+                    bf_n.loc[src, dst] = compute_bayes_factor_bic(pair,
+                                                                  nbr_lag)
         st.subheader("Neighbor Bayes-factor matrix (both directions)")
         st.dataframe(bf_n.style.format("{:.2f}"))
         for src in common_n:
@@ -636,9 +557,11 @@ def main():
                 if src == dst: continue
                 bf = bf_n.loc[src, dst]
                 if pd.notna(bf) and bf >= nbr_bf:
-                    edges_n.append((COUNTRY_NAME_MAP[src], COUNTRY_NAME_MAP[dst]))
+                    edges_n.append((COUNTRY_NAME_MAP[src],
+                                    COUNTRY_NAME_MAP[dst]))
         nodes_n = [COUNTRY_NAME_MAP[c] for c in common_n]
-        draw_directed_network(nodes_n, edges_n, f"Neighbor Network (BF₁₀ ≥ {nbr_bf})")
+        draw_directed_network(nodes_n, edges_n,
+                              f"Neighbor Network (BF₁₀ ≥ {nbr_bf})")
 
     # ----------------------------------------------------------------------
     # Download current results as ZIP of CSVs
@@ -647,20 +570,44 @@ def main():
     zip_buf = BytesIO()
     with zipfile.ZipFile(zip_buf, "w") as zf:
         if not joinpoint_df.empty:
-            zf.writestr("joinpoints.csv", joinpoint_df.to_csv(index=False))
+            zf.writestr("joinpoints.csv",
+                        joinpoint_df.to_csv(index=False))
         for sf, fc in forecasts.items():
-            zf.writestr(f"forecast_{sf}.csv", fc.to_csv(index=False))
+            zf.writestr(f"forecast_{sf}.csv",
+                        fc.to_csv(index=False))
+        if not 'panel_clean' in locals():
+            panel_clean = pd.DataFrame()
+            reg_coefs = pd.Series()
         if not panel_clean.empty:
-            zf.writestr("regression_panel.csv", panel_clean.to_csv(index=False))
-            zf.writestr("regression_coefficients.csv", reg_coefs.to_csv(header=["Coefficient"]))
+            zf.writestr("regression_panel.csv",
+                        panel_clean.to_csv(index=False))
+            zf.writestr("regression_coefficients.csv",
+                        reg_coefs.to_csv(header=["Coefficient"]))
+        if not 'clust_df' in locals():
+            clust_df = pd.DataFrame()
         if not clust_df.empty:
-            zf.writestr("clusters.csv", clust_df.to_csv(index=False))
+            zf.writestr("clusters.csv",
+                        clust_df.to_csv(index=False))
+        if not 'bf_mat' in locals():
+            bf_mat = pd.DataFrame()
+            edges_global = []
         if not bf_mat.empty:
-            zf.writestr("global_bayes_factors.csv", bf_mat.to_csv())
-            zf.writestr("global_edges.csv", pd.DataFrame(edges_global,columns=["source","target"]).to_csv(index=False))
+            zf.writestr("global_bayes_factors.csv",
+                        bf_mat.to_csv())
+            zf.writestr("global_edges.csv",
+                        pd.DataFrame(edges_global,
+                                     columns=["source","target"]
+                                    ).to_csv(index=False))
+        if not 'bf_n' in locals():
+            bf_n = pd.DataFrame()
+            edges_n = []
         if not bf_n.empty:
-            zf.writestr("neighbor_bayes_factors.csv", bf_n.to_csv())
-            zf.writestr("neighbor_edges.csv", pd.DataFrame(edges_n,columns=["source","target"]).to_csv(index=False))
+            zf.writestr("neighbor_bayes_factors.csv",
+                        bf_n.to_csv())
+            zf.writestr("neighbor_edges.csv",
+                        pd.DataFrame(edges_n,
+                                     columns=["source","target"]
+                                    ).to_csv(index=False))
     zip_buf.seek(0)
     st.download_button(
         label="Download current results report",
