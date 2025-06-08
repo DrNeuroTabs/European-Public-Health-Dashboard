@@ -22,6 +22,8 @@ import networkx as nx
 import matplotlib.pyplot as plt
 import zipfile
 
+st.set_page_config(page_title = "European Public Health Dashboard", page_icon="./EU_HealthBoard.ico", layout = "wide")
+
 # --------------------------------------------------------------------------
 # CONSTANTS
 # --------------------------------------------------------------------------
