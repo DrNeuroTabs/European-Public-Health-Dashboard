@@ -221,20 +221,17 @@ def load_eurostat_series(dataset_id: str) -> pd.DataFrame:
             raw = pd.read_csv(files[0], sep="\t", low_memory=False)
     if raw is None:
         raise HTTPError(f"Could not fetch or find local file for {dataset_id}")
-
     first = raw.columns[0]
     dims = first.split("\\")[0].split(",")
     raw = raw.rename(columns={first: "series_keys"})
     keys = raw["series_keys"].str.split(",", expand=True)
     keys.columns = dims
     df = pd.concat([keys, raw.drop(columns=["series_keys"])], axis=1)
-
     years = [c for c in df.columns if c not in dims]
     long = df.melt(id_vars=dims, value_vars=years,
                    var_name="Year", value_name="raw_rate")
     long["Year"] = long["Year"].astype(int)
     long["Rate"] = pd.to_numeric(long["raw_rate"].replace(":", np.nan), errors="coerce")
-
     mask = pd.Series(True, index=long.index)
     if "unit" in dims:
         uv = "RT" if "RT" in long["unit"].unique() else ("NR" if "NR" in long["unit"].unique() else None)
@@ -243,14 +240,12 @@ def load_eurostat_series(dataset_id: str) -> pd.DataFrame:
     if "age" in dims:  mask &= (long["age"] == "TOTAL")
     if "sex" in dims:  mask &= (long["sex"] == "T")
     if "resid" in dims:mask &= (long["resid"] == "TOT_IN")
-
     sub = long[mask].copy()
     rename = {"geo": "Region", "sex": "Sex"}
     others = [d for d in dims if d not in ("geo","sex","freq","unit","age","resid")]
     if len(others) == 1:
         rename[others[0]] = "Category"
     out = sub.rename(columns=rename)
-
     cols = ["Region","Year","Category","Sex","Rate"]
     return out[[c for c in cols if c in out.columns]]
 
@@ -326,8 +321,7 @@ def compute_joinpoints_and_apc(df_sub: pd.DataFrame) -> pd.DataFrame:
 
 def plot_joinpoints_comparative(df_sub: pd.DataFrame, title: str):
     df_sub["SexFull"] = df_sub["Sex"].map(SEX_NAME_MAP)
-    fig = px.line(df_sub, x="Year", y="Rate",
-                  color="SexFull", title=title, markers=True)
+    fig = px.line(df_sub, x="Year", y="Rate", color="SexFull", title=title, markers=True)
     st.plotly_chart(fig)
 
 def plot_segmented_fit_series(df_sub: pd.DataFrame, title: str):
@@ -399,10 +393,7 @@ def compute_bayes_factor_bic(pair_df: pd.DataFrame, maxlag: int) -> float:
         return np.nan
     target, cause = df_pair.columns
     Y = df_pair[target].values[maxlag:]
-    X_alt = np.column_stack([
-        df_pair[cause].values[maxlag - lag:-lag]
-        for lag in range(1, maxlag + 1)
-    ])
+    X_alt = np.column_stack([df_pair[cause].values[maxlag - lag:-lag] for lag in range(1, maxlag + 1)])
     X_alt = sm.add_constant(X_alt)
     X_null = np.ones((len(Y), 1))
     m0 = sm.OLS(Y, X_null).fit()
@@ -410,39 +401,61 @@ def compute_bayes_factor_bic(pair_df: pd.DataFrame, maxlag: int) -> float:
     bic0, bic1 = m0.bic, m1.bic
     return float(np.exp((bic0 - bic1) / 2.0))
 
+# --------------------------------------------------------------------------
+# DRAW DIRECTED NETWORK (labels spaced outward)
+# --------------------------------------------------------------------------
 def draw_directed_network(nodes, edges, title):
+    """
+    Draws a circular directed network with node labels placed outward
+    to reduce overlap.
+    """
     G = nx.DiGraph()
     G.add_nodes_from(nodes)
     G.add_edges_from(edges)
+
+    # Circular layout
     pos = {n: (np.cos(2*np.pi*i/len(nodes)), np.sin(2*np.pi*i/len(nodes)))
-           for i,n in enumerate(nodes)}
+           for i, n in enumerate(nodes)}
+
+    # Scale for label placement
+    label_pos = {n: (x*1.2, y*1.2) for n, (x, y) in pos.items()}
+
     fig, ax = plt.subplots(figsize=(6,6))
     nx.draw_networkx_nodes(G, pos, node_size=500, ax=ax)
-    nx.draw_networkx_labels(G, pos, ax=ax)
+    if edges:
+        nx.draw_networkx_edges(G, pos, arrowstyle='-|>', arrowsize=20, width=2, ax=ax)
+
+    # Draw labels at offset positions
+    for n, (x, y) in label_pos.items():
+        ax.text(x, y, n,
+                horizontalalignment='center',
+                verticalalignment='center',
+                fontsize=10,
+                bbox=dict(facecolor='white', edgecolor='none', pad=0.5))
+
     if not edges:
-        ax.set_title(f"{title}\n\n⚠️ No edges above threshold")
+        ax.set_title(f"{title}\n\n⚠️ No edges above threshold", pad=20)
     else:
-        nx.draw_networkx_edges(
-            G, pos,
-            arrowstyle='-|>',
-            arrowsize=20,
-            width=2,
-            ax=ax
-        )
-        ax.set_title(title)
+        ax.set_title(title, pad=20)
+
     ax.set_axis_off()
     st.pyplot(fig)
 
+# --------------------------------------------------------------------------
+# MAIN APP
+# --------------------------------------------------------------------------
 def main():
     st.set_page_config(layout="wide", page_title="European Public Health Dashboard")
     st.title("European Public Health Dashboard")
     st.markdown("by Younes Adam Tabi")
 
+    # Load & label mortality data
     df = load_data()
     df["CountryFull"] = df["Country"].map(COUNTRY_NAME_MAP)
     df["CauseFull"]   = df["Cause"].map(CAUSE_NAME_MAP)
     df["SexFull"]     = df["Sex"].map(SEX_NAME_MAP)
 
+    # Sidebar controls
     countries    = sorted(df["CountryFull"].dropna().unique())
     country_full = st.sidebar.selectbox("Country", countries,
                                         index=countries.index("European Union"))
@@ -569,21 +582,20 @@ def main():
                                       hover_name="CountryFull", locationmode="ISO-3",
                                       scope="europe", title=f"{cause_full} Clusters (k={best_k})"))
 
-    # Global Bayesian Causality (only neighbor edges)
+    # Global Bayesian Causality (Neighbors Only)
     st.markdown("---")
     st.header("Global Bayesian Causality (Neighbors Only)")
     st.markdown("Directed arrows only between actual neighbors.")
-    country_list    = sorted(df["CountryFull"].dropna().unique())
-    sel_countries   = st.multiselect("Select countries (default: all)", country_list, default=country_list)
-    gl_maxlag       = st.slider("Global max lag (yrs)", 1, 5, 2, key="gl_maxlag")
-    bf_thresh       = st.number_input("BF₁₀ cutoff", 1.0, 100.0, 3.0, 0.5, key="bf_thresh")
+    country_list  = sorted(df["CountryFull"].dropna().unique())
+    sel_countries = st.multiselect("Select countries (default: all)", country_list, default=country_list)
+    gl_maxlag     = st.slider("Global max lag (yrs)", 1, 5, 2, key="gl_maxlag")
+    bf_thresh     = st.number_input("BF₁₀ cutoff", 1.0, 100.0, 3.0, 0.5, key="bf_thresh")
 
     if len(sel_countries) >= 2:
-        df_g      = df[(df["Cause"]==cause_code)&(df["CountryFull"].isin(sel_countries))&(df["Sex"]=="T")&(df["Year"].between(*year_range))]
-        pivot_gc  = df_g.pivot_table(index="Year", columns="CountryFull", values="Rate")
-        common    = [c for c in sel_countries if c in pivot_gc.columns]
+        df_g     = df[(df["Cause"]==cause_code)&(df["CountryFull"].isin(sel_countries))&(df["Sex"]=="T")&(df["Year"].between(*year_range))]
+        pivot_gc = df_g.pivot_table(index="Year", columns="CountryFull", values="Rate")
+        common   = [c for c in sel_countries if c in pivot_gc.columns]
 
-        # compute BF matrix
         bf_mat = pd.DataFrame(np.nan, index=common, columns=common)
         for src in common:
             for dst in common:
@@ -595,7 +607,6 @@ def main():
         st.subheader("Bayes-factor matrix")
         st.dataframe(bf_mat.style.format("{:.2f}"))
 
-        # neighbor-filtered edges
         edges = []
         for src in common:
             for dst in common:
@@ -654,7 +665,7 @@ def main():
         draw_directed_network(nodes_n, edges_n, f"Neighbor Network (BF₁₀ ≥ {nbr_bf_cut})")
 
     st.markdown("---")
-    st.info("Global graph now only shows arrows between actual neighbors.")
+    st.info("Labels are now pushed outward to avoid overlap.")
 
 if __name__ == "__main__":
     main()
