@@ -212,7 +212,6 @@ def load_eurostat_series(dataset_id: str) -> pd.DataFrame:
             break
         except HTTPError:
             raw = None
-
     if raw is None:
         pattern = f"/mnt/data/estat_{dataset_id}*.tsv"
         files = glob.glob(pattern)
@@ -220,20 +219,17 @@ def load_eurostat_series(dataset_id: str) -> pd.DataFrame:
             raw = pd.read_csv(files[0], sep="\t", low_memory=False)
     if raw is None:
         raise HTTPError(f"Could not fetch or find local file for {dataset_id}")
-
     first = raw.columns[0]
     dims = first.split("\\")[0].split(",")
     raw = raw.rename(columns={first: "series_keys"})
     keys = raw["series_keys"].str.split(",", expand=True)
     keys.columns = dims
     df = pd.concat([keys, raw.drop(columns=["series_keys"])], axis=1)
-
     years = [c for c in df.columns if c not in dims]
     long = df.melt(id_vars=dims, value_vars=years,
                    var_name="Year", value_name="raw_rate")
     long["Year"] = long["Year"].astype(int)
     long["Rate"] = pd.to_numeric(long["raw_rate"].replace(":", np.nan), errors="coerce")
-
     mask = pd.Series(True, index=long.index)
     if "unit" in dims:
         uv = "RT" if "RT" in long["unit"].unique() else ("NR" if "NR" in long["unit"].unique() else None)
@@ -242,14 +238,12 @@ def load_eurostat_series(dataset_id: str) -> pd.DataFrame:
     if "age" in dims:  mask &= (long["age"] == "TOTAL")
     if "sex" in dims:  mask &= (long["sex"] == "T")
     if "resid" in dims:mask &= (long["resid"] == "TOT_IN")
-
     sub = long[mask].copy()
     rename = {"geo": "Region", "sex": "Sex"}
     others = [d for d in dims if d not in ("geo","sex","freq","unit","age","resid")]
     if len(others) == 1:
         rename[others[0]] = "Category"
     out = sub.rename(columns=rename)
-
     cols = ["Region","Year","Category","Sex","Rate"]
     return out[[c for c in cols if c in out.columns]]
 
@@ -262,8 +256,10 @@ def load_data() -> pd.DataFrame:
     mod  = ld("hlth_cd_asdr2")
     mod  = mod[mod["Country"].str.fullmatch(r"[A-Z]{2}")]
     df   = pd.concat([hist,mod], ignore_index=True).sort_values(["Country","Cause","Sex","Year"])
-    df_eu  = df[df["Country"].isin(EU_CODES)].groupby(["Year","Cause","Sex"], as_index=False)["Rate"].mean(); df_eu["Country"]="EU"
-    df_eur = df.groupby(["Year","Cause","Sex"], as_index=False)["Rate"].mean(); df_eur["Country"]="Europe"
+    df_eu  = df[df["Country"].isin(EU_CODES)].groupby(["Year","Cause","Sex"], as_index=False)["Rate"].mean()
+    df_eu["Country"] = "EU"
+    df_eur = df.groupby(["Year","Cause","Sex"], as_index=False)["Rate"].mean()
+    df_eur["Country"] = "Europe"
     return pd.concat([df,df_eu,df_eur], ignore_index=True)
 
 @st.cache_data
@@ -342,20 +338,24 @@ def plot_segmented_fit_series(df_sub: pd.DataFrame, title: str):
 def get_prophet_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     dfp = df_sub[["Year","Rate"]].rename(columns={"Year":"ds","Rate":"y"})
     dfp["ds"] = pd.to_datetime(dfp["ds"].astype(str), format="%Y")
-    m = Prophet(yearly_seasonality=False, daily_seasonality=False); m.fit(dfp)
-    fut = m.make_future_dataframe(periods=periods, freq="Y"); fc = m.predict(fut)
+    m = Prophet(yearly_seasonality=False, daily_seasonality=False)
+    m.fit(dfp)
+    fut = m.make_future_dataframe(periods=periods, freq="Y")
+    fc = m.predict(fut)
     return pd.DataFrame({"Year": fc["ds"].dt.year, "Prophet": fc["yhat"]})
 
 def get_arima_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     ser = df_sub.set_index("Year")["Rate"]
-    res = ARIMA(ser, order=(1,1,1)).fit(); preds = res.forecast(periods)
+    res = ARIMA(ser, order=(1,1,1)).fit()
+    preds = res.forecast(periods)
     yrs = np.arange(ser.index.max()+1, ser.index.max()+1+periods)
     return pd.DataFrame({"Year": yrs, "ARIMA": preds.values})
 
 def get_ets_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     ser = df_sub.set_index("Year")["Rate"]
     m = ExponentialSmoothing(ser, trend="add", seasonal=None).fit(optimized=True)
-    preds = m.forecast(periods); yrs = np.arange(ser.index.max()+1, ser.index.max()+1+periods)
+    preds = m.forecast(periods)
+    yrs = np.arange(ser.index.max()+1, ser.index.max()+1+periods)
     return pd.DataFrame({"Year": yrs, "ETS": preds.values})
 
 def forecast_mortality(df_sub: pd.DataFrame, periods: int, method: str, title: str):
@@ -381,7 +381,7 @@ def forecast_mortality(df_sub: pd.DataFrame, periods: int, method: str, title: s
     st.plotly_chart(fig)
 
 # --------------------------------------------------------------------------
-# BIC-based Bayes‐factor approximation
+# BIC-based Bayes-factor approximation
 # --------------------------------------------------------------------------
 def compute_bayes_factor_bic(pair_df: pd.DataFrame, maxlag: int) -> float:
     df_pair = pair_df.dropna()
@@ -443,7 +443,7 @@ def main():
         st.warning("No data for selected filters.")
     else:
         st.markdown("### Joinpoint Trend")
-        plot_joinpoints_comparative(df_f, f"{cause_full} Trend")
+        plot_joinpoints_comparative(df_f, f"{cause_full} Trend by Sex")
         st.markdown("### Segmented Linear Fits")
         for sc, sf in zip(sex_codes, sex_sel):
             plot_segmented_fit_series(df_f[df_f["Sex"]==sc], f"{cause_full} ({sf}) Fit")
@@ -550,7 +550,7 @@ def main():
             title=f"{cause_full} Clusters (k={best_k})"
         ))
 
-    # --- Global Bayesian Causality ------------------------------------------
+    # --- Global Bayesian Causality with Debug & Beefy Arrows ---------------
     st.markdown("---")
     st.header("Global Bayesian Causality")
     st.markdown(
@@ -560,8 +560,9 @@ def main():
     country_list = sorted(df["CountryFull"].dropna().unique())
     sel_countries = st.multiselect("Select countries (default: all)",
                                    country_list, default=country_list)
-    gl_maxlag  = st.slider("Max lag (yrs)", 1, 5, 2, key="gl_lag_bf")
-    bf_thresh  = st.number_input("BF₁₀ cutoff for arrow", 1.0, 100.0, 3.0, 0.5)
+    gl_maxlag = st.slider("Global max lag (yrs)", 1, 5, 2, key="gl_lag_bf")
+    bf_thresh = st.number_input("BF₁₀ cutoff for arrow", 1.0, 100.0, 3.0, 0.5)
+
     if len(sel_countries) >= 2:
         df_g = df[
             (df["Cause"]==cause_code)&
@@ -571,14 +572,27 @@ def main():
         ]
         pivot_gc = df_g.pivot_table(index="Year", columns="CountryFull", values="Rate")
         common = [c for c in sel_countries if c in pivot_gc.columns]
+
         if len(common) >= 2:
             bf_mat = pd.DataFrame(np.nan, index=common, columns=common)
             with st.spinner("Computing Bayes-factors…"):
                 for src in common:
                     for dst in common:
-                        if src==dst: continue
+                        if src == dst:
+                            continue
                         pair = pivot_gc[[dst, src]]
                         bf_mat.loc[src, dst] = compute_bayes_factor_bic(pair, gl_maxlag)
+
+            # Debug output
+            st.subheader("🔍 Debug Bayes-factors & edges")
+            st.write("Threshold for arrows (BF₁₀ ≥):", bf_thresh)
+            st.dataframe(bf_mat.style.format("{:.2f}"))
+            edges = [
+                (i, j) for i in common for j in common
+                if i != j and pd.notna(bf_mat.loc[i, j]) and bf_mat.loc[i, j] >= bf_thresh
+            ]
+            st.write("Detected edges:", edges)
+
             # raw BF heatmap
             fig_hm = px.imshow(
                 bf_mat,
@@ -588,33 +602,38 @@ def main():
             )
             st.plotly_chart(fig_hm)
 
-            edges = [
-                (i, j) for i in common for j in common
-                if i!=j and pd.notna(bf_mat.loc[i,j]) and bf_mat.loc[i,j]>=bf_thresh
-            ]
-            theta = np.linspace(0,2*np.pi,len(common),endpoint=False)
-            pos = {n:(np.cos(t),np.sin(t)) for n,t in zip(common,theta)}
+            # build directed network with beefier arrows
+            theta = np.linspace(0, 2*np.pi, len(common), endpoint=False)
+            pos = {n: (np.cos(t), np.sin(t)) for n, t in zip(common, theta)}
             fig_net = go.Figure()
             xs, ys = zip(*(pos[n] for n in common))
             fig_net.add_trace(go.Scatter(
                 x=xs, y=ys,
                 mode="markers+text",
                 marker=dict(size=20),
-                text=common, textposition="bottom center"
+                text=common,
+                textposition="bottom center"
             ))
             for src, dst in edges:
-                x0,y0 = pos[src]; x1,y1 = pos[dst]
+                x0, y0 = pos[src]
+                x1, y1 = pos[dst]
                 fig_net.add_annotation(
                     x=x1, y=y1, ax=x0, ay=y0,
-                    showarrow=True, arrowhead=3, arrowsize=1, arrowwidth=1
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowsize=2,
+                    arrowwidth=2,
+                    arrowcolor="crimson"
                 )
             fig_net.update_layout(
                 title=f"Global Network (BF₁₀ ≥ {bf_thresh})",
-                xaxis=dict(visible=False), yaxis=dict(visible=False), height=600
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                height=600
             )
             st.plotly_chart(fig_net)
 
-    # --- Neighbor-Based Bayesian Causality ----------------------------------
+    # --- Neighbor-Based Bayesian Causality with Debug & Beefy Arrows  -------
     st.markdown("---")
     st.header("Neighbor-Based Bayesian Causality")
     st.markdown("Same BF₁₀ approach, focused on a focal country and its neighbors.")
@@ -622,8 +641,8 @@ def main():
     foc_code = REV_COUNTRY_NAME_MAP.get(foc_full, foc_full)
     nbrs = NEIGHBORS.get(foc_code, [])
     map_df = pd.DataFrame({
-        "Country":[foc_code]+nbrs,
-        "Role":   ["Focal"]+["Neighbor"]*len(nbrs)
+        "Country": [foc_code] + nbrs,
+        "Role":    ["Focal"] + ["Neighbor"] * len(nbrs)
     })
     map_df["CountryFull"] = map_df["Country"].map(COUNTRY_NAME_MAP)
     map_df["iso_alpha"]   = map_df["Country"].apply(alpha3_from_a2)
@@ -634,7 +653,7 @@ def main():
     ))
 
     if nbrs:
-        gb = [foc_code]+nbrs
+        gb = [foc_code] + nbrs
         df_n = df[
             (df["Cause"]==cause_code)&
             (df["Country"].isin(gb))&
@@ -643,16 +662,30 @@ def main():
         ]
         pivot_n = df_n.pivot_table(index="Year", columns="Country", values="Rate")
         common_n = [c for c in gb if c in pivot_n.columns]
+
         if len(common_n) >= 2:
-            nbr_lag      = st.slider("Neighbor max lag (yrs)",1,5,2,key="nbr_lag_bf_nbr")
-            nbr_bf_cut   = st.number_input("Neighbor BF₁₀ cutoff",1.0,100.0,3.0,0.5,key="nbr_bf_cut")
+            nbr_lag     = st.slider("Neighbor max lag (yrs)", 1, 5, 2, key="nbr_lag_bf")
+            nbr_bf_cut  = st.number_input("Neighbor BF₁₀ cutoff", 1.0, 100.0, 3.0, 0.5, key="nbr_bf_cut")
+
             bf_n = pd.DataFrame(np.nan, index=common_n, columns=common_n)
             with st.spinner("Computing neighbor Bayes-factors…"):
                 for src in common_n:
                     for dst in common_n:
-                        if src==dst: continue
+                        if src == dst:
+                            continue
                         pair = pivot_n[[dst, src]]
-                        bf_n.loc[src,dst] = compute_bayes_factor_bic(pair, nbr_lag)
+                        bf_n.loc[src, dst] = compute_bayes_factor_bic(pair, nbr_lag)
+
+            # Debug output
+            st.subheader("🔍 Debug Neighbor Bayes-factors & edges")
+            st.write("Neighbor threshold (BF₁₀ ≥):", nbr_bf_cut)
+            st.dataframe(bf_n.style.format("{:.2f}"))
+            edges_n = [
+                (i, j) for i in common_n for j in common_n
+                if i != j and pd.notna(bf_n.loc[i, j]) and bf_n.loc[i, j] >= nbr_bf_cut
+            ]
+            st.write("Detected neighbor edges:", edges_n)
+
             # raw BF heatmap
             names = {c: COUNTRY_NAME_MAP[c] for c in common_n}
             fig_hm_n = px.imshow(
@@ -662,29 +695,36 @@ def main():
                 title="Neighbor-Based Bayesian Heatmap (BF₁₀)"
             )
             st.plotly_chart(fig_hm_n)
+
             # directed neighbor network
-            pos_n = {COUNTRY_NAME_MAP[n]:(np.cos(t),np.sin(t))
-                     for n,t in zip(common_n, np.linspace(0,2*np.pi,len(common_n),endpoint=False))}
+            theta_n = np.linspace(0, 2*np.pi, len(common_n), endpoint=False)
+            pos_n = {COUNTRY_NAME_MAP[c]: (np.cos(t), np.sin(t))
+                     for c, t in zip(common_n, theta_n)}
             fig_net_n = go.Figure()
             xs_n, ys_n = zip(*(pos_n[n] for n in pos_n))
             fig_net_n.add_trace(go.Scatter(
                 x=xs_n, y=ys_n,
                 mode="markers+text",
                 marker=dict(size=20),
-                text=list(pos_n.keys()), textposition="bottom center"
+                text=list(pos_n.keys()),
+                textposition="bottom center"
             ))
-            for src, dst in [
-                (i,j) for i in common_n for j in common_n
-                if i!=j and pd.notna(bf_n.loc[i,j]) and bf_n.loc[i,j]>=nbr_bf_cut
-            ]:
-                x0,y0 = pos_n[COUNTRY_NAME_MAP[src]]; x1,y1 = pos_n[COUNTRY_NAME_MAP[dst]]
+            for src, dst in edges_n:
+                x0, y0 = pos_n[COUNTRY_NAME_MAP[src]]
+                x1, y1 = pos_n[COUNTRY_NAME_MAP[dst]]
                 fig_net_n.add_annotation(
                     x=x1, y=y1, ax=x0, ay=y0,
-                    showarrow=True, arrowhead=3, arrowsize=1, arrowwidth=1
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowsize=2,
+                    arrowwidth=2,
+                    arrowcolor="crimson"
                 )
             fig_net_n.update_layout(
                 title=f"Neighbor Network (BF₁₀ ≥ {nbr_bf_cut})",
-                xaxis=dict(visible=False), yaxis=dict(visible=False), height=600
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                height=600
             )
             st.plotly_chart(fig_net_n)
 
@@ -693,3 +733,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
