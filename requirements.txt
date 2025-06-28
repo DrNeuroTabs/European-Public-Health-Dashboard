@@ -5,9 +5,10 @@ plotly
 prophet
 ruptures
 requests
-statsmodels
 pycountry
 icd10-cm
 pmdarima
 networkx
 matplotlib
+scipy<=1.10.1
+statsmodels>=0.14.0
