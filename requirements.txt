@@ -10,5 +10,5 @@ icd10-cm
 pmdarima
 networkx
 matplotlib
-statsmodels>=0.18.1
-scipy>=1.11.1
+scipy<=1.10.1
+statsmodels>=0.17.0
