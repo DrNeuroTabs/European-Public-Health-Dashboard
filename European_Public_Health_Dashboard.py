@@ -655,11 +655,11 @@ def main():
             df["CauseFull"] = df["Cause"].map(CAUSE_NAME_MAP).fillna(df["Cause"])
             df["SexFull"] = df["Sex"].map(SEX_NAME_MAP).fillna(df["Sex"])
     
-    # Sidebar filters
-    st.sidebar.header("📊 Data Filters")
+        # Sidebar filters
+        st.sidebar.header("📊 Data Filters")
     
-    countries = sorted(df["CountryFull"].dropna().unique())
-    country_full = st.sidebar.selectbox(
+        countries = sorted(df["CountryFull"].dropna().unique())
+        country_full = st.sidebar.selectbox(
         "Country", 
         countries,
         index=countries.index("European Union") if "European Union" in countries else 0
