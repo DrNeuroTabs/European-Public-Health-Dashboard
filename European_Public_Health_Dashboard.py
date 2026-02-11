@@ -410,10 +410,10 @@ def plot_heatmap_temporal(df_sub: pd.DataFrame, title: str):
 def get_prophet_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     """Generate Prophet forecast."""
     dfp = df_sub[["Year", "Rate"]].rename(columns={"Year": "ds", "Rate": "y"})
-    dfp["ds"] = pd.to_datetime(dfp["ds"].astype(str), format="%Y")
-    m = Prophet(yearly_seasonality=False, daily_seasonality=False)
+    dfp["ds"] = pd.to_datetime(dfp["ds"].astype(str) + "-01-01", format="%Y-%m-%d")
+    m = Prophet(yearly_seasonality=False, daily_seasonality=False, weekly_seasonality=False)
     m.fit(dfp)
-    fut = m.make_future_dataframe(periods=periods, freq="YE")
+    fut = m.make_future_dataframe(periods=periods, freq="YS")
     fc = m.predict(fut)
     return pd.DataFrame({"Year": fc["ds"].dt.year, "Prophet": fc["yhat"]})
 
@@ -485,50 +485,55 @@ def compute_granger_causality_bic(pair_df: pd.DataFrame, maxlag: int) -> dict:
 
 def draw_directed_network(nodes, edges, title, edge_labels=None):
     """Draw directed network with improved layout."""
-    G = nx.DiGraph()
-    G.add_nodes_from(nodes)
-    G.add_edges_from(edges)
-    
-    angles = np.linspace(0, 2*np.pi, len(nodes), endpoint=False)
-    fig, ax = plt.subplots(figsize=(8, 8))
-    pos = {nodes[i]: (np.cos(angles[i]), np.sin(angles[i])) for i in range(len(nodes))}
-    
-    if edges:
-        nx.draw_networkx_edges(
-            G, pos,
-            arrows=True, arrowsize=20, width=2,
-            edge_color='gray',
-            ax=ax,
-            connectionstyle="arc3,rad=0.1"
-        )
+    try:
+        G = nx.DiGraph()
+        G.add_nodes_from(nodes)
+        G.add_edges_from(edges)
         
-        # Add edge labels if provided
-        if edge_labels:
-            edge_labels_dict = {(e[0], e[1]): f"BF={edge_labels.get((e[0], e[1]), '')}" 
-                               for e in edges if (e[0], e[1]) in edge_labels}
-            nx.draw_networkx_edge_labels(G, pos, edge_labels_dict, font_size=8, ax=ax)
-    
-    nx.draw_networkx_nodes(G, pos, node_size=700, node_color='skyblue', ax=ax)
-    
-    # Better label placement
-    radius = 1.4
-    for i, node in enumerate(nodes):
-        angle = angles[i]
-        x, y = np.cos(angle)*radius, np.sin(angle)*radius
-        ha = "left" if np.cos(angle) > 0 else "right"
-        va = "bottom" if np.sin(angle) > 0 else "top"
-        ax.text(x, y, node, ha=ha, va=va,
-                fontsize=10,
-                bbox=dict(facecolor='white', edgecolor='black', 
-                         boxstyle='round,pad=0.5', alpha=0.8),
-                zorder=3)
-    
-    ax.set_title(title, pad=20, fontsize=14, fontweight='bold')
-    ax.set_axis_off()
-    ax.set_xlim(-1.8, 1.8)
-    ax.set_ylim(-1.8, 1.8)
-    st.pyplot(fig)
-    plt.close()
+        angles = np.linspace(0, 2*np.pi, len(nodes), endpoint=False)
+        fig, ax = plt.subplots(figsize=(8, 8))
+        pos = {nodes[i]: (np.cos(angles[i]), np.sin(angles[i])) for i in range(len(nodes))}
+        
+        if edges:
+            nx.draw_networkx_edges(
+                G, pos,
+                arrows=True, arrowsize=20, width=2,
+                edge_color='gray',
+                ax=ax,
+                connectionstyle="arc3,rad=0.1"
+            )
+            
+            # Add edge labels if provided
+            if edge_labels:
+                edge_labels_dict = {(e[0], e[1]): f"BF={edge_labels.get((e[0], e[1]), '')}" 
+                                   for e in edges if (e[0], e[1]) in edge_labels}
+                if edge_labels_dict:
+                    nx.draw_networkx_edge_labels(G, pos, edge_labels_dict, font_size=8, ax=ax)
+        
+        nx.draw_networkx_nodes(G, pos, node_size=700, node_color='skyblue', ax=ax)
+        
+        # Better label placement
+        radius = 1.4
+        for i, node in enumerate(nodes):
+            angle = angles[i]
+            x, y = np.cos(angle)*radius, np.sin(angle)*radius
+            ha = "left" if np.cos(angle) > 0 else "right"
+            va = "bottom" if np.sin(angle) > 0 else "top"
+            ax.text(x, y, node, ha=ha, va=va,
+                    fontsize=10,
+                    bbox=dict(facecolor='white', edgecolor='black', 
+                             boxstyle='round,pad=0.5', alpha=0.8),
+                    zorder=3)
+        
+        ax.set_title(title, pad=20, fontsize=14, fontweight='bold')
+        ax.set_axis_off()
+        ax.set_xlim(-1.8, 1.8)
+        ax.set_ylim(-1.8, 1.8)
+        st.pyplot(fig)
+        plt.close()
+    except Exception as e:
+        st.error(f"Error drawing network: {str(e)}")
+        plt.close('all')
 
 # --------------------------------------------------------------------------
 # NEW ANALYSES
@@ -631,23 +636,24 @@ def compare_with_benchmark(df, country_code, cause_code, year_range):
 # MAIN APPLICATION
 # --------------------------------------------------------------------------
 def main():
-    st.set_page_config(
-        layout="wide",
-        page_title="European Public Health Dashboard",
-        page_icon="🏥"
-    )
-    
-    st.title("🏥 European Public Health Dashboard")
-    st.markdown("### Advanced Mortality Trend Analysis & Forecasting")
-    st.markdown("*Developed by Younes Adam Tabi*")
-    st.markdown("---")
-    
-    # Load data
-    with st.spinner("Loading data..."):
-        df = load_data()
-        df["CountryFull"] = df["Country"].map(COUNTRY_NAME_MAP)
-        df["CauseFull"] = df["Cause"].map(CAUSE_NAME_MAP)
-        df["SexFull"] = df["Sex"].map(SEX_NAME_MAP)
+    try:
+        st.set_page_config(
+            layout="wide",
+            page_title="European Public Health Dashboard",
+            page_icon="🏥"
+        )
+        
+        st.title("🏥 European Public Health Dashboard")
+        st.markdown("### Advanced Mortality Trend Analysis & Forecasting")
+        st.markdown("*Developed by Younes Adam Tabi*")
+        st.markdown("---")
+        
+        # Load data
+        with st.spinner("Loading data..."):
+            df = load_data()
+            df["CountryFull"] = df["Country"].map(COUNTRY_NAME_MAP).fillna(df["Country"])
+            df["CauseFull"] = df["Cause"].map(CAUSE_NAME_MAP).fillna(df["Cause"])
+            df["SexFull"] = df["Sex"].map(SEX_NAME_MAP).fillna(df["Sex"])
     
     # Sidebar filters
     st.sidebar.header("📊 Data Filters")
@@ -756,58 +762,64 @@ def main():
         # Benchmark comparison
         if country_code not in ["EU", "Europe"]:
             st.subheader("📊 Benchmark Comparison with EU Average")
-            benchmark = compare_with_benchmark(df, country_code, cause_code, year_range)
             
-            if not benchmark.empty:
-                fig = make_subplots(
-                    rows=2, cols=1,
-                    subplot_titles=("Absolute Rates", "Percentage Difference from EU"),
-                    vertical_spacing=0.15
-                )
+            try:
+                benchmark = compare_with_benchmark(df, country_code, cause_code, year_range)
                 
-                fig.add_trace(
-                    go.Scatter(x=benchmark["Year"], y=benchmark["Country"],
-                             mode='lines+markers', name=country_full,
-                             line=dict(width=3)),
-                    row=1, col=1
-                )
-                fig.add_trace(
-                    go.Scatter(x=benchmark["Year"], y=benchmark["EU Average"],
-                             mode='lines+markers', name="EU Average",
-                             line=dict(width=3, dash='dash')),
-                    row=1, col=1
-                )
-                
-                fig.add_trace(
-                    go.Bar(x=benchmark["Year"], y=benchmark["Pct_Difference"],
-                          marker_color=np.where(benchmark["Pct_Difference"] > 0, 
-                                              'red', 'green'),
-                          showlegend=False),
-                    row=2, col=1
-                )
-                fig.add_hline(y=0, line_dash="dash", line_color="black", 
-                            row=2, col=1)
-                
-                fig.update_xaxes(title_text="Year", row=2, col=1)
-                fig.update_yaxes(title_text="Rate", row=1, col=1)
-                fig.update_yaxes(title_text="% Difference", row=2, col=1)
-                fig.update_layout(height=700, showlegend=True)
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Summary statistics
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Average Rate (Country)", 
-                            f"{benchmark['Country'].mean():.1f}")
-                with col2:
-                    st.metric("Average Rate (EU)", 
-                            f"{benchmark['EU Average'].mean():.1f}")
-                with col3:
-                    avg_diff = benchmark['Pct_Difference'].mean()
-                    st.metric("Average Difference", 
-                            f"{avg_diff:+.1f}%",
-                            delta=f"{'Above' if avg_diff > 0 else 'Below'} EU avg")
+                if not benchmark.empty and len(benchmark) > 0:
+                    fig = make_subplots(
+                        rows=2, cols=1,
+                        subplot_titles=("Absolute Rates", "Percentage Difference from EU"),
+                        vertical_spacing=0.15
+                    )
+                    
+                    fig.add_trace(
+                        go.Scatter(x=benchmark["Year"], y=benchmark["Country"],
+                                 mode='lines+markers', name=country_full,
+                                 line=dict(width=3)),
+                        row=1, col=1
+                    )
+                    fig.add_trace(
+                        go.Scatter(x=benchmark["Year"], y=benchmark["EU Average"],
+                                 mode='lines+markers', name="EU Average",
+                                 line=dict(width=3, dash='dash')),
+                        row=1, col=1
+                    )
+                    
+                    fig.add_trace(
+                        go.Bar(x=benchmark["Year"], y=benchmark["Pct_Difference"],
+                              marker_color=np.where(benchmark["Pct_Difference"] > 0, 
+                                                  'red', 'green'),
+                              showlegend=False),
+                        row=2, col=1
+                    )
+                    fig.add_hline(y=0, line_dash="dash", line_color="black", 
+                                row=2, col=1)
+                    
+                    fig.update_xaxes(title_text="Year", row=2, col=1)
+                    fig.update_yaxes(title_text="Rate", row=1, col=1)
+                    fig.update_yaxes(title_text="% Difference", row=2, col=1)
+                    fig.update_layout(height=700, showlegend=True)
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Summary statistics
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Average Rate (Country)", 
+                                f"{benchmark['Country'].mean():.1f}")
+                    with col2:
+                        st.metric("Average Rate (EU)", 
+                                f"{benchmark['EU Average'].mean():.1f}")
+                    with col3:
+                        avg_diff = benchmark['Pct_Difference'].mean()
+                        st.metric("Average Difference", 
+                                f"{avg_diff:+.1f}%",
+                                delta=f"{'Above' if avg_diff > 0 else 'Below'} EU avg")
+                else:
+                    st.info("Benchmark comparison data not available for selected period")
+            except Exception as e:
+                st.warning(f"Could not compute benchmark comparison: {str(e)}")
     
     # ======================================================================
     # SECTION 2: HEALTH FACTORS & REGRESSION
@@ -998,17 +1010,24 @@ def main():
         st.subheader("Cluster Characteristics")
         for cluster in sorted(clust_df["Cluster"].unique()):
             with st.expander(f"Cluster {cluster}"):
-                cluster_countries = clust_df[clust_df["Cluster"] == cluster]["CountryFull"].tolist()
-                st.write(f"**Countries:** {', '.join(cluster_countries)}")
+                cluster_countries = clust_df[clust_df["Cluster"] == cluster]["CountryFull"].dropna().tolist()
+                if cluster_countries:
+                    st.write(f"**Countries:** {', '.join(cluster_countries)}")
+                else:
+                    st.write("**Countries:** No valid country names")
                 
                 # Plot average trajectory
                 cluster_codes = clust_df[clust_df["Cluster"] == cluster]["Country"].tolist()
                 cluster_data = df_cluster[df_cluster["Country"].isin(cluster_codes)]
-                avg_trajectory = cluster_data.groupby("Year")["Rate"].mean().reset_index()
                 
-                fig = px.line(avg_trajectory, x="Year", y="Rate",
-                            title=f"Average Mortality Trajectory - Cluster {cluster}")
-                st.plotly_chart(fig, use_container_width=True)
+                if not cluster_data.empty:
+                    avg_trajectory = cluster_data.groupby("Year")["Rate"].mean().reset_index()
+                    
+                    fig = px.line(avg_trajectory, x="Year", y="Rate",
+                                title=f"Average Mortality Trajectory - Cluster {cluster}")
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("No data available for this cluster")
     
     # ======================================================================
     # SECTION 4: GRANGER CAUSALITY NETWORK (CORRECTED)
@@ -1248,29 +1267,32 @@ def main():
         sorted(df["Year"].unique(), reverse=True)
     )
     
-    spatial_result = compute_spatial_autocorrelation(df, spatial_year, cause_code)
-    
-    if spatial_result:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Moran's I", f"{spatial_result['morans_i']:.3f}")
-            if spatial_result['morans_i'] > 0.3:
-                st.success("Strong positive spatial autocorrelation")
-            elif spatial_result['morans_i'] > 0:
-                st.info("Weak positive spatial autocorrelation")
-            else:
-                st.warning("Negative or no spatial autocorrelation")
-        with col2:
-            st.metric("Countries Analyzed", spatial_result['n_countries'])
+    try:
+        spatial_result = compute_spatial_autocorrelation(df, spatial_year, cause_code)
         
-        st.markdown("""
-        **Interpretation:**
-        - **Moran's I > 0:** Similar values cluster together spatially
-        - **Moran's I ≈ 0:** Random spatial pattern
-        - **Moran's I < 0:** Dissimilar values cluster together
-        """)
-    else:
-        st.warning("Insufficient data for spatial autocorrelation analysis")
+        if spatial_result:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Moran's I", f"{spatial_result['morans_i']:.3f}")
+                if spatial_result['morans_i'] > 0.3:
+                    st.success("Strong positive spatial autocorrelation")
+                elif spatial_result['morans_i'] > 0:
+                    st.info("Weak positive spatial autocorrelation")
+                else:
+                    st.warning("Negative or no spatial autocorrelation")
+            with col2:
+                st.metric("Countries Analyzed", spatial_result['n_countries'])
+            
+            st.markdown("""
+            **Interpretation:**
+            - **Moran's I > 0:** Similar values cluster together spatially
+            - **Moran's I ≈ 0:** Random spatial pattern
+            - **Moran's I < 0:** Dissimilar values cluster together
+            """)
+        else:
+            st.warning("Insufficient data for spatial autocorrelation analysis")
+    except Exception as e:
+        st.warning(f"Could not compute spatial autocorrelation: {str(e)}")
     
     # ======================================================================
     # SECTION 6: DOWNLOAD REPORT
@@ -1344,6 +1366,13 @@ Analysis Parameters:
     <p>Data Source: Eurostat | Analysis Framework: Advanced Time Series & Spatial Methods</p>
     </div>
     """, unsafe_allow_html=True)
+    
+    except Exception as e:
+        st.error("🚨 An unexpected error occurred. Please check your selections and try again.")
+        st.error(f"Error details: {str(e)}")
+        import traceback
+        with st.expander("Show full error trace"):
+            st.code(traceback.format_exc())
 
 if __name__ == "__main__":
     main()
