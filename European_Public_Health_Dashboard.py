@@ -34,7 +34,8 @@ EU_CODES = [
 ]
 
 NEIGHBORS = {
-    "AT": ["DE", "CZ", "SK", "HU", "SI", "IT"],
+    # EU Members
+    "AT": ["DE", "CZ", "SK", "HU", "SI", "IT", "CH", "LI"],
     "BE": ["FR", "DE", "NL", "LU"],
     "BG": ["RO", "EL"],
     "HR": ["SI", "HU"],
@@ -42,13 +43,13 @@ NEIGHBORS = {
     "CZ": ["DE", "PL", "SK", "AT"],
     "DK": ["DE"],
     "EE": ["LV"],
-    "FI": ["SE"],
-    "FR": ["BE", "LU", "DE", "IT", "ES"],
-    "DE": ["DK", "PL", "CZ", "AT", "FR", "LU", "BE", "NL"],
+    "FI": ["SE", "NO"],
+    "FR": ["BE", "LU", "DE", "IT", "ES", "CH"],
+    "DE": ["DK", "PL", "CZ", "AT", "FR", "LU", "BE", "NL", "CH"],
     "EL": ["BG"],
     "HU": ["AT", "SK", "RO", "HR"],
-    "IE": [],
-    "IT": ["FR", "AT", "SI"],
+    "IE": ["UK"],
+    "IT": ["FR", "AT", "SI", "CH"],
     "LV": ["EE", "LT"],
     "LT": ["LV", "PL"],
     "LU": ["BE", "DE", "FR"],
@@ -60,7 +61,13 @@ NEIGHBORS = {
     "SK": ["CZ", "PL", "HU", "AT"],
     "SI": ["IT", "AT", "HU", "HR"],
     "ES": ["FR", "PT"],
-    "SE": ["FI"]
+    "SE": ["FI", "NO"],
+    # EFTA & Former Members
+    "CH": ["FR", "DE", "IT", "AT", "LI"],
+    "LI": ["CH", "AT"],
+    "NO": ["SE", "FI"],
+    "IS": [],
+    "UK": ["IE"]
 }
 
 SEX_NAME_MAP = {"T": "Total", "M": "Male", "F": "Female"}
@@ -190,11 +197,9 @@ FACTOR_IDS = {
     "Unmet needs": "hlth_ehis_un1e"
 }
 
-
 def alpha3_from_a2(a2: str):
     c = pycountry.countries.get(alpha_2=a2)
     return c.alpha_3 if c else None
-
 
 # --------------------------------------------------------------------------
 # DATA LOADING
@@ -305,7 +310,6 @@ def load_all_factors() -> pd.DataFrame:
         return pd.DataFrame(columns=["Country", "Year", "Sex", "Rate", "FactorName"])
     return pd.concat(frames, ignore_index=True)
 
-
 # --------------------------------------------------------------------------
 # CHANGEPOINT DETECTION
 # --------------------------------------------------------------------------
@@ -318,7 +322,6 @@ def detect_change_points(ts, pen: float = 3) -> list:
         return algo.predict(pen=pen)
     except BadSegmentationParameters:
         return []
-
 
 def compute_changepoints_and_apc(df_sub: pd.DataFrame) -> pd.DataFrame:
     recs = []
@@ -352,7 +355,6 @@ def compute_changepoints_and_apc(df_sub: pd.DataFrame) -> pd.DataFrame:
 
     return pd.DataFrame(recs)
 
-
 # --------------------------------------------------------------------------
 # VISUALIZATION FUNCTIONS
 # --------------------------------------------------------------------------
@@ -362,7 +364,6 @@ def plot_changepoints_comparative(df_sub: pd.DataFrame, title: str):
     fig = px.line(df_sub, x="Year", y="Rate", color="SexFull", title=title, markers=True)
     fig.update_layout(hovermode="x unified")
     st.plotly_chart(fig, use_container_width=True)
-
 
 def plot_segmented_fit_series(df_sub: pd.DataFrame, title: str):
     sub = df_sub.sort_values("Year")
@@ -395,7 +396,6 @@ def plot_segmented_fit_series(df_sub: pd.DataFrame, title: str):
     )
     st.plotly_chart(fig, use_container_width=True)
 
-
 # --------------------------------------------------------------------------
 # FORECASTING
 # --------------------------------------------------------------------------
@@ -408,7 +408,6 @@ def get_prophet_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     fc = m.predict(fut)
     return pd.DataFrame({"Year": fc["ds"].dt.year, "Prophet": fc["yhat"]})
 
-
 def get_arima_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     ser = df_sub.set_index("Year")["Rate"]
     res = ARIMA(ser, order=(1, 1, 1)).fit()
@@ -416,14 +415,12 @@ def get_arima_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     yrs = np.arange(ser.index.max() + 1, ser.index.max() + 1 + periods)
     return pd.DataFrame({"Year": yrs, "ARIMA": preds.values})
 
-
 def get_ets_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     ser = df_sub.set_index("Year")["Rate"]
     m = ExponentialSmoothing(ser, trend="add", seasonal=None).fit(optimized=True)
     preds = m.forecast(periods)
     yrs = np.arange(ser.index.max() + 1, ser.index.max() + 1 + periods)
     return pd.DataFrame({"Year": yrs, "ETS": preds.values})
-
 
 def forecast_mortality(df_sub: pd.DataFrame, periods: int, method: str) -> pd.DataFrame:
     prop = get_prophet_forecast(df_sub, periods)
@@ -443,7 +440,6 @@ def forecast_mortality(df_sub: pd.DataFrame, periods: int, method: str) -> pd.Da
     hist = df_sub[["Year", "Rate"]].rename(columns={"Rate": "History"})
     return hist.merge(fc[["Year", "Forecast"]], on="Year", how="outer")
 
-
 # --------------------------------------------------------------------------
 # GRANGER / NETWORK HELPERS
 # --------------------------------------------------------------------------
@@ -452,21 +448,10 @@ def has_physical_border(src_code: str, dst_code: str) -> bool:
         return False
     return dst_code in NEIGHBORS.get(src_code, [])
 
-
 def make_lag_matrix(series: np.ndarray, maxlag: int) -> np.ndarray:
     return np.column_stack([series[maxlag - lag:-lag] for lag in range(1, maxlag + 1)])
 
-
 def compute_granger_causality_bic(pair_df: pd.DataFrame, maxlag: int) -> dict:
-    """
-    Standard Granger comparison:
-      null = target's own lags
-      alt  = target's own lags + source lags
-
-    Returns:
-      approx_bf10 : BIC-based approximation to BF10
-      p_value     : F-test p-value
-    """
     df_pair = pair_df.dropna().copy()
     if df_pair.shape[0] < (2 * maxlag + 5):
         return {"approx_bf10": np.nan, "p_value": np.nan}
@@ -504,7 +489,6 @@ def compute_granger_causality_bic(pair_df: pd.DataFrame, maxlag: int) -> dict:
     except Exception:
         return {"approx_bf10": np.nan, "p_value": np.nan}
 
-
 def apply_fdr_correction(pval_df: pd.DataFrame, allowed_mask: pd.DataFrame) -> pd.DataFrame:
     corrected = pval_df.copy()
     tested_pairs = []
@@ -527,7 +511,6 @@ def apply_fdr_correction(pval_df: pd.DataFrame, allowed_mask: pd.DataFrame) -> p
 
     return corrected
 
-
 def build_allowed_mask_from_codes(codes: list) -> pd.DataFrame:
     mask = pd.DataFrame(False, index=codes, columns=codes)
     for src in codes:
@@ -536,7 +519,6 @@ def build_allowed_mask_from_codes(codes: list) -> pd.DataFrame:
                 continue
             mask.loc[src, dst] = has_physical_border(src, dst)
     return mask
-
 
 def build_allowed_mask_from_names(names: list) -> pd.DataFrame:
     mask = pd.DataFrame(False, index=names, columns=names)
@@ -549,17 +531,7 @@ def build_allowed_mask_from_names(names: list) -> pd.DataFrame:
             mask.loc[src, dst] = has_physical_border(src_code, dst_code)
     return mask
 
-
 def draw_directed_network(nodes, title, edge_stats_df=None):
-    """
-    Draw network with:
-    - nodes
-    - arrows
-    - numeric edge IDs only on the graph
-    - full edge statistics in a table underneath
-
-    No BF/q-value text is drawn inside the graph.
-    """
     try:
         if edge_stats_df is None or edge_stats_df.empty:
             st.info("No edges to display.")
@@ -621,7 +593,6 @@ def draw_directed_network(nodes, title, edge_stats_df=None):
             lx = bx + curve_offset * px
             ly = by + curve_offset * py
 
-            # ONLY edge ID here
             ax.text(
                 lx, ly, edge_id,
                 fontsize=8,
@@ -683,13 +654,12 @@ def draw_directed_network(nodes, title, edge_stats_df=None):
         st.error(f"Error drawing network: {str(e)}")
         plt.close("all")
 
-
 # --------------------------------------------------------------------------
 # OTHER ANALYSES
 # --------------------------------------------------------------------------
 def compute_spatial_autocorrelation(df, year, cause_code):
     rates_df = df[
-        (df["Country"].isin(EU_CODES)) &
+        (df["Country"].isin(NEIGHBORS.keys())) &
         (df["Cause"] == cause_code) &
         (df["Sex"] == "T") &
         (df["Year"] == year)
@@ -723,7 +693,6 @@ def compute_spatial_autocorrelation(df, year, cause_code):
 
     return {"morans_i": moran_i, "n_countries": n}
 
-
 def compare_with_benchmark(df, country_code, cause_code, year_range):
     country_data = df[
         (df["Country"] == country_code) &
@@ -743,7 +712,6 @@ def compare_with_benchmark(df, country_code, cause_code, year_range):
     comparison["Difference"] = comparison["Country"] - comparison["EU Average"]
     comparison["Pct_Difference"] = (comparison["Difference"] / comparison["EU Average"]) * 100
     return comparison
-
 
 # --------------------------------------------------------------------------
 # MAIN APPLICATION
