@@ -396,18 +396,6 @@ def plot_segmented_fit_series(df_sub: pd.DataFrame, title: str):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def plot_heatmap_temporal(df_sub: pd.DataFrame, title: str):
-    pivot = df_sub.pivot_table(index="Country", columns="Year", values="Rate")
-    fig = px.imshow(
-        pivot,
-        labels=dict(x="Year", y="Country", color="Rate"),
-        title=title,
-        aspect="auto",
-        color_continuous_scale="RdYlGn_r"
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-
 # --------------------------------------------------------------------------
 # FORECASTING
 # --------------------------------------------------------------------------
@@ -562,34 +550,46 @@ def build_allowed_mask_from_names(names: list) -> pd.DataFrame:
     return mask
 
 
-def draw_directed_network(nodes, edges, title, edge_labels=None):
+def draw_directed_network(nodes, edges, title, edge_stats_df=None):
     """
-    Draw directed network with clearer handling of reciprocal edges.
-    Each directional label is placed closer to its source node and offset
-    along the curvature, so A->B and B->A do not sit on top of each other.
+    Clean directed network:
+    - arrows only
+    - tiny numeric edge IDs on the arcs
+    - full statistics shown in a separate table below
+
+    edge_stats_df should contain:
+    ["edge_id", "source", "target", "approx_bf10", "q_value"]
     """
     try:
+        if edge_stats_df is None or edge_stats_df.empty:
+            st.info("No edges to display.")
+            return
+
         G = nx.DiGraph()
         G.add_nodes_from(nodes)
-        G.add_edges_from(edges)
+        G.add_edges_from([(row["source"], row["target"]) for _, row in edge_stats_df.iterrows()])
 
         n = len(nodes)
         angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
 
-        fig, ax = plt.subplots(figsize=(11, 11))
+        fig, ax = plt.subplots(figsize=(10, 10))
         pos = {nodes[i]: (np.cos(angles[i]), np.sin(angles[i])) for i in range(n)}
 
         nx.draw_networkx_nodes(
             G, pos,
-            node_size=1000,
+            node_size=1050,
             node_color="skyblue",
             edgecolors="black",
             linewidths=1.2,
             ax=ax
         )
 
-        for (u, v) in edges:
-            reciprocal = (v, u) in edges and u != v
+        for _, row in edge_stats_df.iterrows():
+            u = row["source"]
+            v = row["target"]
+            edge_id = str(row["edge_id"])
+
+            reciprocal = ((edge_stats_df["source"] == v) & (edge_stats_df["target"] == u)).any()
             rad = 0.24 if (reciprocal and str(u) < str(v)) else (-0.24 if reciprocal else 0.10)
 
             nx.draw_networkx_edges(
@@ -605,40 +605,33 @@ def draw_directed_network(nodes, edges, title, edge_labels=None):
                 min_target_margin=22
             )
 
-            if edge_labels and (u, v) in edge_labels:
-                x1, y1 = pos[u]
-                x2, y2 = pos[v]
+            x1, y1 = pos[u]
+            x2, y2 = pos[v]
+            dx, dy = x2 - x1, y2 - y1
+            length = np.hypot(dx, dy)
+            if length == 0:
+                continue
 
-                dx, dy = x2 - x1, y2 - y1
-                length = np.hypot(dx, dy)
-                if length == 0:
-                    continue
+            px, py = -dy / length, dx / length
 
-                ux, uy = dx / length, dy / length
-                px, py = -uy, ux
+            bx = x1 + 0.34 * dx
+            by = y1 + 0.34 * dy
+            curve_offset = 0.10 if rad > 0 else -0.10
+            lx = bx + curve_offset * px
+            ly = by + curve_offset * py
 
-                bx = x1 + 0.38 * dx
-                by = y1 + 0.38 * dy
-
-                curve_offset = 0.12 if rad > 0 else -0.12
-                lx = bx + curve_offset * px
-                ly = by + curve_offset * py
-
-                label_text = f"{u}→{v}\n{edge_labels[(u, v)]}"
-
-                ax.text(
-                    lx, ly,
-                    label_text,
-                    fontsize=8,
-                    ha="center", va="center",
-                    bbox=dict(
-                        facecolor="white",
-                        edgecolor="gray",
-                        boxstyle="round,pad=0.25",
-                        alpha=0.92
-                    ),
-                    zorder=6
-                )
+            ax.text(
+                lx, ly, edge_id,
+                fontsize=8,
+                ha="center", va="center",
+                bbox=dict(
+                    facecolor="white",
+                    edgecolor="gray",
+                    boxstyle="circle,pad=0.18",
+                    alpha=0.95
+                ),
+                zorder=6
+            )
 
         radius = 1.34
         for i, node in enumerate(nodes):
@@ -666,9 +659,24 @@ def draw_directed_network(nodes, edges, title, edge_labels=None):
         ax.set_axis_off()
         ax.set_xlim(-1.95, 1.95)
         ax.set_ylim(-1.95, 1.95)
-
         st.pyplot(fig)
         plt.close()
+
+        st.markdown("#### Edge Statistics")
+        show_df = edge_stats_df.copy()
+        show_df["approx_bf10"] = show_df["approx_bf10"].map(lambda x: f"{x:.2f}" if pd.notna(x) else "")
+        show_df["q_value"] = show_df["q_value"].map(lambda x: f"{x:.4f}" if pd.notna(x) else "")
+        st.dataframe(
+            show_df.rename(columns={
+                "edge_id": "ID",
+                "source": "From",
+                "target": "To",
+                "approx_bf10": "Approx. BF₁₀",
+                "q_value": "Q-value"
+            }),
+            use_container_width=True
+        )
+
     except Exception as e:
         st.error(f"Error drawing network: {str(e)}")
         plt.close("all")
@@ -1153,11 +1161,11 @@ def main():
         bf_mat = pd.DataFrame()
         pval_mat = pd.DataFrame()
         pval_mat_corr = pd.DataFrame()
-
         bf_n = pd.DataFrame()
         pval_n = pd.DataFrame()
         pval_n_corr = pd.DataFrame()
-
+        edge_stats_global = pd.DataFrame()
+        edge_stats_n = pd.DataFrame()
         edges_global = []
         edges_n = []
 
@@ -1260,7 +1268,8 @@ def main():
                         )
 
                     edges_n = []
-                    edge_labels = {}
+                    edge_rows_n = []
+                    edge_counter = 1
 
                     for src in common_n:
                         for dst in common_n:
@@ -1279,25 +1288,30 @@ def main():
                             if passes:
                                 src_full = COUNTRY_NAME_MAP.get(src, src)
                                 dst_full = COUNTRY_NAME_MAP.get(dst, dst)
+
                                 edges_n.append((src_full, dst_full))
+                                edge_rows_n.append({
+                                    "edge_id": edge_counter,
+                                    "source": src_full,
+                                    "target": dst_full,
+                                    "approx_bf10": bf,
+                                    "q_value": qcorr
+                                })
+                                edge_counter += 1
 
-                                if pd.notna(qcorr):
-                                    edge_labels[(src_full, dst_full)] = f"{bf:.1f} | q={qcorr:.3f}"
-                                else:
-                                    edge_labels[(src_full, dst_full)] = f"{bf:.1f}"
-
+                    edge_stats_n = pd.DataFrame(edge_rows_n)
                     nodes_n = [COUNTRY_NAME_MAP.get(c, c) for c in common_n]
 
                     st.subheader("Network Visualization")
                     st.caption(
                         "Only countries in the focal set are analyzed, and only physical-border edges are allowed. "
-                        "Reciprocal arrows are labelled separately near their source directions."
+                        "The graph shows only small edge IDs; full statistics are listed below."
                     )
 
-                    if not edges_n:
+                    if edge_stats_n.empty:
                         st.info("No qualifying Granger relationships detected under the current thresholds.")
                     else:
-                        st.success(f"Found {len(edges_n)} qualifying relationships")
+                        st.success(f"Found {len(edge_stats_n)} qualifying relationships")
                         title_suffix = f"Approx. BF₁₀ ≥ {nbr_bf}"
                         if require_sig:
                             title_suffix += ", q < 0.05"
@@ -1305,7 +1319,7 @@ def main():
                             nodes_n,
                             edges_n,
                             f"Neighbor Granger Network ({title_suffix})",
-                            edge_labels
+                            edge_stats_df=edge_stats_n
                         )
 
         else:
@@ -1381,7 +1395,8 @@ def main():
                     st.plotly_chart(fig_q, use_container_width=True)
 
                     edges_global = []
-                    edge_labels_global = {}
+                    edge_rows_global = []
+                    edge_counter = 1
 
                     for src in common:
                         for dst in common:
@@ -1399,21 +1414,27 @@ def main():
 
                             if passes:
                                 edges_global.append((src, dst))
-                                if pd.notna(qcorr):
-                                    edge_labels_global[(src, dst)] = f"{bf:.1f} | q={qcorr:.3f}"
-                                else:
-                                    edge_labels_global[(src, dst)] = f"{bf:.1f}"
+                                edge_rows_global.append({
+                                    "edge_id": edge_counter,
+                                    "source": src,
+                                    "target": dst,
+                                    "approx_bf10": bf,
+                                    "q_value": qcorr
+                                })
+                                edge_counter += 1
+
+                    edge_stats_global = pd.DataFrame(edge_rows_global)
 
                     st.subheader("Global Network (Physical Borders Only)")
                     st.caption(
                         "All candidate countries are included, but only actual land-border pairs are tested and drawn. "
-                        "Bidirectional labels are separated near the source side of each arrow."
+                        "The graph uses only small edge IDs; full statistics are listed below."
                     )
 
-                    if not edges_global:
+                    if edge_stats_global.empty:
                         st.info("No qualifying relationships detected under the current thresholds.")
                     else:
-                        st.success(f"Found {len(edges_global)} qualifying neighbor relationships")
+                        st.success(f"Found {len(edge_stats_global)} qualifying neighbor relationships")
                         title_suffix = f"Approx. BF₁₀ ≥ {bf_thresh}"
                         if require_sig_global:
                             title_suffix += ", q < 0.05"
@@ -1421,7 +1442,7 @@ def main():
                             common,
                             edges_global,
                             f"Global Granger Network ({title_suffix})",
-                            edge_labels_global
+                            edge_stats_df=edge_stats_global
                         )
 
         # ======================================================================
@@ -1478,20 +1499,14 @@ def main():
                 zf.writestr("regression_panel_data.csv", panel_clean.to_csv(index=False))
                 zf.writestr("regression_coefficients.csv", reg_coefs.to_frame("Coefficient").to_csv())
 
-            if not clust_df.empty:
-                zf.writestr("cluster_assignments.csv", clust_df.to_csv(index=False))
-
             if isinstance(bf_mat, pd.DataFrame) and (not bf_mat.empty):
                 zf.writestr("global_granger_approx_bf10.csv", bf_mat.to_csv())
             if isinstance(pval_mat, pd.DataFrame) and (not pval_mat.empty):
                 zf.writestr("global_granger_pvalues_raw.csv", pval_mat.to_csv())
             if isinstance(pval_mat_corr, pd.DataFrame) and (not pval_mat_corr.empty):
                 zf.writestr("global_granger_qvalues_fdr.csv", pval_mat_corr.to_csv())
-            if edges_global:
-                zf.writestr(
-                    "global_network_edges.csv",
-                    pd.DataFrame(edges_global, columns=["source", "target"]).to_csv(index=False)
-                )
+            if not edge_stats_global.empty:
+                zf.writestr("global_network_edges.csv", edge_stats_global.to_csv(index=False))
 
             if isinstance(bf_n, pd.DataFrame) and (not bf_n.empty):
                 zf.writestr("neighbor_granger_approx_bf10.csv", bf_n.to_csv())
@@ -1499,11 +1514,8 @@ def main():
                 zf.writestr("neighbor_granger_pvalues_raw.csv", pval_n.to_csv())
             if isinstance(pval_n_corr, pd.DataFrame) and (not pval_n_corr.empty):
                 zf.writestr("neighbor_granger_qvalues_fdr.csv", pval_n_corr.to_csv())
-            if edges_n:
-                zf.writestr(
-                    "neighbor_network_edges.csv",
-                    pd.DataFrame(edges_n, columns=["source", "target"]).to_csv(index=False)
-                )
+            if not edge_stats_n.empty:
+                zf.writestr("neighbor_network_edges.csv", edge_stats_n.to_csv(index=False))
 
             metadata = f"""
 European Public Health Dashboard - Analysis Report
@@ -1520,6 +1532,7 @@ Notes:
 - Granger networks use physical-border filtering via NEIGHBORS dictionary.
 - P-values in network sections are FDR-corrected into q-values.
 - Evidence values are BIC-based approximations to BF10, not full Bayesian Bayes factors.
+- Network plots use compact edge IDs; detailed statistics are listed in separate tables.
 - The "Detected Segments" table corresponds to the segmented-fit panels.
 """
             zf.writestr("README.txt", metadata)
@@ -1537,7 +1550,7 @@ Notes:
         st.markdown(
             """
             <div style='text-align: center; color: gray; padding: 20px;'>
-            <p>European Public Health Dashboard v2.2</p>
+            <p>European Public Health Dashboard v2.3</p>
             <p>Data Source: Eurostat | Analysis Framework: Time Series, Spatial Methods, and Border-Constrained Granger Networks</p>
             </div>
             """,
