@@ -624,7 +624,7 @@ def main():
     try:
         st.set_page_config(layout="wide", page_title="Euro Health Dashboard", page_icon="euhealthdashboard.ico")
 
-        st.title("🏥 European Public Health Dashboard")
+        st.title("European Public Health Dashboard")
         st.markdown("### Advanced Mortality Trend Analysis, Spatial Mapping & Network Dynamics")
         st.markdown("---")
 
@@ -761,7 +761,7 @@ def main():
                 # RESTORED BENCHMARK COMPARISON
                 if country_code not in ["EU", "Europe"]:
                     st.markdown("---")
-                    st.subheader("📊 Benchmark Comparison with EU Average")
+                    st.subheader("Benchmark Comparison with EU Average")
                     try:
                         benchmark = compare_with_benchmark(df, country_code, cause_code, age_code, year_range)
 
@@ -854,7 +854,7 @@ def main():
         # TAB 3: HEALTH & MACRO FACTORS
         # ======================================================================
         with tab3:
-            st.header("🔬 Socioeconomic & Health Factor Regression")
+            st.header("Socioeconomic & Health Factor Regression")
             st.info("Assess how macro-economic variables (like GDP per capita) and health system capacities impact mortality.")
 
             factors = st.multiselect("Select factors to include in OLS model", list(FACTOR_IDS.keys()), default=["GDP per capita (Volume)"])
@@ -915,7 +915,7 @@ def main():
         # TAB 4: SPATIAL & CLUSTERS
         # ======================================================================
         with tab4:
-            st.header("🗺️ Spatial Analysis & Clusters")
+            st.header("Spatial Analysis & Clusters")
             
             df_spatial = df[
                 (df["Cause"] == cause_code) & 
@@ -999,7 +999,7 @@ def main():
         # TAB 5: GRANGER NETWORK
         # ======================================================================
         with tab5:
-            st.header("🔗 Granger Causality Spillovers")
+            st.header("Granger Causality Spillovers")
             st.info("Identifies if historical mortality rates in one country predict future rates in a neighboring country. Edges map directional influence.")
 
             # RESTORED ANALYSIS TOGGLE
@@ -1106,7 +1106,7 @@ def main():
                                     st.dataframe(edge_stats_n.rename(columns={"edge_id": "ID", "source": "From", "target": "To", "approx_bf10": "Approx. BF₁₀", "q_value": "Q-value"}), use_container_width=True)
 
             else:
-                st.subheader("🌍 Global Granger Causality Network")
+                st.subheader("Global Granger Causality Network")
                 
                 # RESTORED GLOBAL MULTISELECT
                 country_list = sorted(df["CountryFull"].dropna().unique())
@@ -1130,7 +1130,7 @@ def main():
                     if len(common) < 2:
                         st.warning("Insufficient data for selected countries")
                     else:
-                        if st.button("🚀 Generate Global Network"):
+                        if st.button("Generate Global Network"):
                             with st.spinner("Computing global Granger causality..."):
                                 bf_mat = pd.DataFrame(np.nan, index=common, columns=common)
                                 pval_mat = pd.DataFrame(np.nan, index=common, columns=common)
