@@ -695,7 +695,7 @@ def main():
         # TAB 1: TEMPORAL TRENDS
         # ======================================================================
         with tab1:
-            st.header(f"📈 Temporal Trend Analysis: {cause_full}")
+            st.header(f"Temporal Trend Analysis: {cause_full}")
             st.markdown(f"**Cohort:** {age_sel} | **Country:** {country_full}")
 
             if df_filtered.empty:
@@ -704,7 +704,7 @@ def main():
                 df_anom = detect_anomalies(df_filtered)
                 changepoint_df = compute_changepoints_and_apc(df_filtered)
 
-                st.subheader("🔍 Trend Segmentation & Outlier Detection")
+                st.subheader("Trend Segmentation & Outlier Detection")
                 
                 sub = df_filtered.sort_values("Year")
                 fig = go.Figure()
@@ -815,7 +815,7 @@ def main():
         # TAB 2: CROSS-CAUSE COMPARISON
         # ======================================================================
         with tab2:
-            st.header("⚖️ Cross-Cause Trend Comparison (Displacement Analysis)")
+            st.header("Cross-Cause Trend Comparison (Displacement Analysis)")
             st.info("Compare two different causes of death to identify inverse relationships. Rates are normalized to 100 at the start year.")
             
             col_c1, col_c2 = st.columns(2)
