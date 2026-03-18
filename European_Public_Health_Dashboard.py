@@ -76,7 +76,6 @@ REV_SEX_NAME = {v: k for k, v in SEX_NAME_MAP.items()}
 AGE_NAME_MAP = {"TOTAL": "All Ages", "Y_LT65": "Under 65 (Premature)", "Y_GE65": "65 and Over"}
 REV_AGE_NAME_MAP = {v: k for k, v in AGE_NAME_MAP.items()}
 
-# Restored FULL cause map
 CAUSE_NAME_MAP = {
     "TOTAL": "Total",
     "A_B": "Certain infectious and parasitic diseases (A00-B99)",
@@ -461,6 +460,141 @@ def compute_granger_causality_bic(pair_df: pd.DataFrame, maxlag: int) -> dict:
     except Exception:
         return {"approx_bf10": np.nan, "p_value": np.nan}
 
+def apply_fdr_correction(pval_df: pd.DataFrame, allowed_mask: pd.DataFrame) -> pd.DataFrame:
+    corrected = pval_df.copy()
+    tested_pairs = []
+    raw_pvals = []
+
+    for src in pval_df.index:
+        for dst in pval_df.columns:
+            if src == dst:
+                continue
+            if bool(allowed_mask.loc[src, dst]):
+                p = pval_df.loc[src, dst]
+                if pd.notna(p):
+                    tested_pairs.append((src, dst))
+                    raw_pvals.append(p)
+
+    if raw_pvals:
+        _, pvals_corr, _, _ = multipletests(raw_pvals, method="fdr_bh")
+        for (src, dst), pc in zip(tested_pairs, pvals_corr):
+            corrected.loc[src, dst] = pc
+
+    return corrected
+
+def build_allowed_mask_from_codes(codes: list) -> pd.DataFrame:
+    mask = pd.DataFrame(False, index=codes, columns=codes)
+    for src in codes:
+        for dst in codes:
+            if src == dst: continue
+            mask.loc[src, dst] = has_physical_border(src, dst)
+    return mask
+
+def build_allowed_mask_from_names(names: list) -> pd.DataFrame:
+    mask = pd.DataFrame(False, index=names, columns=names)
+    for src in names:
+        for dst in names:
+            if src == dst: continue
+            src_code = REV_COUNTRY_NAME_MAP.get(src)
+            dst_code = REV_COUNTRY_NAME_MAP.get(dst)
+            mask.loc[src, dst] = has_physical_border(src_code, dst_code)
+    return mask
+
+def draw_directed_network(nodes, title, edge_stats_df=None):
+    try:
+        if edge_stats_df is None or edge_stats_df.empty:
+            st.info("No edges to display.")
+            return
+
+        G = nx.DiGraph()
+        G.add_nodes_from(nodes)
+        G.add_edges_from(edge_stats_df[["source", "target"]].itertuples(index=False, name=None))
+
+        n = len(nodes)
+        angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
+
+        fig, ax = plt.subplots(figsize=(10, 10))
+        pos = {nodes[i]: (np.cos(angles[i]), np.sin(angles[i])) for i in range(n)}
+
+        nx.draw_networkx_nodes(
+            G, pos,
+            node_size=1050,
+            node_color="skyblue",
+            edgecolors="black",
+            linewidths=1.2,
+            ax=ax
+        )
+
+        edge_pairs = set(edge_stats_df[["source", "target"]].itertuples(index=False, name=None))
+
+        for _, row in edge_stats_df.iterrows():
+            u = row["source"]
+            v = row["target"]
+            edge_id = str(row["edge_id"])
+
+            reciprocal = (v, u) in edge_pairs
+            rad = 0.24 if (reciprocal and str(u) < str(v)) else (-0.24 if reciprocal else 0.10)
+
+            nx.draw_networkx_edges(
+                G, pos,
+                edgelist=[(u, v)],
+                arrows=True,
+                arrowsize=24,
+                width=2,
+                edge_color="gray",
+                ax=ax,
+                connectionstyle=f"arc3,rad={rad}",
+                min_source_margin=22,
+                min_target_margin=22
+            )
+
+            x1, y1 = pos[u]
+            x2, y2 = pos[v]
+            dx, dy = x2 - x1, y2 - y1
+            length = np.hypot(dx, dy)
+            if length == 0: continue
+
+            px, py = -dy / length, dx / length
+            bx = x1 + 0.34 * dx
+            by = y1 + 0.34 * dy
+            curve_offset = 0.10 if rad > 0 else -0.10
+            lx = bx + curve_offset * px
+            ly = by + curve_offset * py
+
+            ax.text(
+                lx, ly, edge_id,
+                fontsize=8, ha="center", va="center",
+                bbox=dict(facecolor="white", edgecolor="gray", boxstyle="circle,pad=0.18", alpha=0.95),
+                zorder=6
+            )
+
+        radius = 1.34
+        for i, node in enumerate(nodes):
+            angle = angles[i]
+            x = np.cos(angle) * radius
+            y = np.sin(angle) * radius
+
+            ha = "left" if np.cos(angle) > 0.05 else ("right" if np.cos(angle) < -0.05 else "center")
+            va = "bottom" if np.sin(angle) > 0.05 else ("top" if np.sin(angle) < -0.05 else "center")
+
+            ax.text(
+                x, y, node,
+                ha=ha, va=va, fontsize=10,
+                bbox=dict(facecolor="white", edgecolor="black", boxstyle="round,pad=0.35", alpha=0.95),
+                zorder=7
+            )
+
+        ax.set_title(title, pad=20, fontsize=14, fontweight="bold")
+        ax.set_axis_off()
+        ax.set_xlim(-1.95, 1.95)
+        ax.set_ylim(-1.95, 1.95)
+        st.pyplot(fig)
+        plt.close()
+
+    except Exception as e:
+        st.error(f"Error drawing network: {str(e)}")
+        plt.close("all")
+
 # --------------------------------------------------------------------------
 # MAIN APPLICATION & TABS
 # --------------------------------------------------------------------------
@@ -665,7 +799,6 @@ def main():
                     else:
                         panel_clean = panel.dropna(subset=present + ["Mortality"])
 
-                        # The safety check that fixes the previous crash
                         if panel_clean.empty or panel_clean.shape[0] < len(present) + 2:
                             st.warning(f"⚠️ Insufficient continuous observations (found {panel_clean.shape[0]}) for reliable regression.")
                         else:
@@ -692,7 +825,7 @@ def main():
         # TAB 4: SPATIAL & CLUSTERS
         # ======================================================================
         with tab4:
-            st.header("🗺️ Spatial Analysis & Animated Mapping")
+            st.header("🗺️ Spatial Analysis & Clusters")
             
             st.subheader("Time-Lapse: Spread of Mortality Rates")
             anim_df = df[
@@ -715,7 +848,7 @@ def main():
                 st.plotly_chart(fig_map, use_container_width=True)
 
             st.markdown("---")
-            col_sp1, col_sp2 = st.columns(2)
+            col_sp1, col_sp2 = st.columns([1, 1.5])
             
             with col_sp1:
                 st.subheader("Spatial Autocorrelation (Moran's I)")
@@ -742,7 +875,22 @@ def main():
                     labels = KMeans(n_clusters=best_k, random_state=42, n_init=10).fit_predict(X_clust)
                     pivot_clust["Cluster"] = [f"Profile {l+1}" for l in labels]
                     
-                    st.dataframe(pivot_clust[["Cluster"]].reset_index(), use_container_width=True)
+                    # RESTORED CLUSTER MAP
+                    clust_df_map = pivot_clust.reset_index()[["Country", "Cluster"]]
+                    clust_df_map["CountryFull"] = clust_df_map["Country"].map(COUNTRY_NAME_MAP)
+                    clust_df_map["iso_alpha"] = clust_df_map["Country"].apply(alpha3_from_a2)
+
+                    st.markdown("##### Geographic Distribution of Clusters")
+                    fig_cluster_map = px.choropleth(
+                        clust_df_map, locations="iso_alpha", color="Cluster", hover_name="CountryFull",
+                        locationmode="ISO-3", scope="europe",
+                        color_discrete_sequence=px.colors.qualitative.Set2
+                    )
+                    fig_cluster_map.update_layout(height=400, margin={"r":0,"t":0,"l":0,"b":0})
+                    st.plotly_chart(fig_cluster_map, use_container_width=True)
+                    
+                    with st.expander("View Cluster Assignments"):
+                        st.dataframe(pivot_clust[["Cluster"]].reset_index(), use_container_width=True)
 
         # ======================================================================
         # TAB 5: GRANGER NETWORK
@@ -751,9 +899,13 @@ def main():
             st.header("🔗 Granger Causality Spillovers")
             st.info("Identifies if historical mortality rates in one country predict future rates in a neighboring country. Edges map directional influence.")
 
-            gl_maxlag = st.slider("Max Lag (Years)", 1, 5, 2)
-            bf_thresh = st.number_input("BF₁₀ threshold", 1.0, 100.0, 3.0, 0.5)
-            
+            # RESTORED ANALYSIS TOGGLE
+            analysis_type = st.radio(
+                "Analysis Type",
+                ["Neighbor-Based Analysis", "Global Network Analysis"],
+                horizontal=True
+            )
+
             df_g = df[
                 (df["Cause"] == cause_code) &
                 (df["Sex"] == "T") &
@@ -761,41 +913,162 @@ def main():
                 (df["Year"].between(*year_range)) &
                 (df["Country"].str.len() == 2)
             ]
-            
-            pivot_gc = df_g.pivot_table(index="Year", columns="Country", values="Rate")
-            valid_countries = [c for c in pivot_gc.columns if pivot_gc[c].count() > (2*gl_maxlag + 5)]
 
-            if len(valid_countries) < 2:
-                st.warning("Insufficient continuous data for network generation.")
+            if analysis_type == "Neighbor-Based Analysis":
+                st.subheader(f"🎯 Focal Country: {country_full} & Neighbors")
+                
+                nbrs = NEIGHBORS.get(country_code, [])
+                if not nbrs:
+                    st.warning(f"No neighboring countries defined for {country_full} in the current mapping.")
+                else:
+                    gl_maxlag = st.slider("Max Lag (Years)", 1, 5, 2, key="n_lag")
+                    bf_thresh = st.number_input("BF₁₀ threshold", 1.0, 100.0, 3.0, 0.5, key="n_bf")
+                    require_sig = st.checkbox("Require FDR-corrected q < 0.05 for edges", value=True, key="n_sig")
+
+                    countries_to_analyze = [country_code] + nbrs
+                    df_n_data = df_g[df_g["Country"].isin(countries_to_analyze)]
+                    pivot_n = df_n_data.pivot_table(index="Year", columns="Country", values="Rate")
+                    common_n = [c for c in countries_to_analyze if c in pivot_n.columns]
+
+                    if len(common_n) < 2:
+                        st.warning("Insufficient data for analysis in the selected time period.")
+                    else:
+                        if st.button("🚀 Generate Neighbor Network"):
+                            with st.spinner("Computing Granger causality..."):
+                                bf_n = pd.DataFrame(np.nan, index=common_n, columns=common_n)
+                                pval_n = pd.DataFrame(np.nan, index=common_n, columns=common_n)
+                                allowed_n = build_allowed_mask_from_codes(common_n)
+
+                                for src in common_n:
+                                    for dst in common_n:
+                                        if src == dst or not allowed_n.loc[src, dst]: continue
+                                        pair = pivot_n[[dst, src]].dropna()
+                                        if len(pair) >= (2 * gl_maxlag + 5):
+                                            result = compute_granger_causality_bic(pair, gl_maxlag)
+                                            bf_n.loc[src, dst] = result["approx_bf10"]
+                                            pval_n.loc[src, dst] = result["p_value"]
+
+                                pval_n_corr = apply_fdr_correction(pval_n, allowed_n)
+
+                                edge_rows_n = []
+                                edge_counter = 1
+
+                                for src in common_n:
+                                    for dst in common_n:
+                                        if src == dst or not allowed_n.loc[src, dst]: continue
+                                        bf = bf_n.loc[src, dst]
+                                        qcorr = pval_n_corr.loc[src, dst]
+
+                                        passes = pd.notna(bf) and (bf >= bf_thresh)
+                                        if require_sig: passes = passes and pd.notna(qcorr) and (qcorr < 0.05)
+
+                                        if passes:
+                                            edge_rows_n.append({
+                                                "edge_id": edge_counter,
+                                                "source": COUNTRY_NAME_MAP.get(src, src),
+                                                "target": COUNTRY_NAME_MAP.get(dst, dst),
+                                                "approx_bf10": bf,
+                                                "q_value": qcorr
+                                            })
+                                            edge_counter += 1
+
+                                edge_stats_n = pd.DataFrame(edge_rows_n)
+                                nodes_n = [COUNTRY_NAME_MAP.get(c, c) for c in common_n]
+
+                                # RESTORED DIRECTED GRAPH VISUALIZATION
+                                st.markdown("##### Directed Spillover Graph")
+                                if edge_stats_n.empty:
+                                    st.info("No qualifying Granger relationships detected under the current thresholds.")
+                                else:
+                                    draw_directed_network(nodes_n, f"Neighbor Granger Network", edge_stats_df=edge_stats_n)
+                                    
+                                    # Detailed DataFrames Below Graph
+                                    st.markdown("##### Detailed Edge Statistics")
+                                    st.dataframe(edge_stats_n.rename(columns={"edge_id": "ID", "source": "From", "target": "To", "approx_bf10": "Approx. BF₁₀", "q_value": "Q-value"}), use_container_width=True)
+
             else:
-                if st.button("🚀 Generate Global Spillover Network"):
-                    with st.spinner("Running pairwise OLS models..."):
-                        bf_mat = pd.DataFrame(np.nan, index=valid_countries, columns=valid_countries)
-                        
-                        for src in valid_countries:
-                            for dst in valid_countries:
-                                if src == dst or not has_physical_border(src, dst): continue
-                                pair = pivot_gc[[dst, src]].dropna()
-                                if len(pair) > 5:
-                                    res = compute_granger_causality_bic(pair, gl_maxlag)
-                                    bf_mat.loc[src, dst] = res["approx_bf10"]
+                st.subheader("🌍 Global Granger Causality Network")
+                
+                # RESTORED GLOBAL MULTISELECT
+                country_list = sorted(df["CountryFull"].dropna().unique())
+                sel_countries = st.multiselect(
+                    "Select countries to include",
+                    country_list,
+                    default=[c for c in ["Germany", "France", "Italy", "Spain", "Poland"] if c in country_list]
+                )
 
-                        edges = []
-                        for src in valid_countries:
-                            for dst in valid_countries:
-                                bf = bf_mat.loc[src, dst]
-                                if pd.notna(bf) and bf >= bf_thresh:
-                                    edges.append({"source": src, "target": dst, "BF10": bf})
-                        
-                        edge_df = pd.DataFrame(edges)
-                        
-                        if not edge_df.empty:
-                            st.success(f"Network generated: {len(edge_df)} significant edges found.")
-                            fig_net = px.imshow(bf_mat.astype(float), color_continuous_scale="YlOrRd", title="Adjacency Matrix (Approx BF10)")
-                            st.plotly_chart(fig_net, use_container_width=True)
-                            st.dataframe(edge_df.sort_values("BF10", ascending=False), use_container_width=True)
-                        else:
-                            st.info("No significant predictive spillovers detected at current threshold.")
+                if len(sel_countries) < 2:
+                    st.warning("Please select at least 2 countries")
+                else:
+                    gl_maxlag = st.slider("Max Lag (Years)", 1, 5, 2, key="g_lag")
+                    bf_thresh = st.number_input("BF₁₀ threshold", 1.0, 100.0, 3.0, 0.5, key="g_bf")
+                    require_sig = st.checkbox("Require FDR-corrected q < 0.05 for global edges", value=True, key="g_sig")
+
+                    df_g_filtered = df_g[df_g["CountryFull"].isin(sel_countries)]
+                    pivot_gc = df_g_filtered.pivot_table(index="Year", columns="CountryFull", values="Rate")
+                    common = [c for c in sel_countries if c in pivot_gc.columns]
+
+                    if len(common) < 2:
+                        st.warning("Insufficient data for selected countries")
+                    else:
+                        if st.button("🚀 Generate Global Network"):
+                            with st.spinner("Computing global Granger causality..."):
+                                bf_mat = pd.DataFrame(np.nan, index=common, columns=common)
+                                pval_mat = pd.DataFrame(np.nan, index=common, columns=common)
+                                allowed_global = build_allowed_mask_from_names(common)
+
+                                for src in common:
+                                    for dst in common:
+                                        if src == dst or not allowed_global.loc[src, dst]: continue
+                                        pair = pivot_gc[[dst, src]].dropna()
+                                        if len(pair) >= (2 * gl_maxlag + 5):
+                                            result = compute_granger_causality_bic(pair, gl_maxlag)
+                                            bf_mat.loc[src, dst] = result["approx_bf10"]
+                                            pval_mat.loc[src, dst] = result["p_value"]
+
+                                pval_mat_corr = apply_fdr_correction(pval_mat, allowed_global)
+
+                                edge_rows_global = []
+                                edge_counter = 1
+
+                                for src in common:
+                                    for dst in common:
+                                        if src == dst or not allowed_global.loc[src, dst]: continue
+                                        bf = bf_mat.loc[src, dst]
+                                        qcorr = pval_mat_corr.loc[src, dst]
+
+                                        passes = pd.notna(bf) and (bf >= bf_thresh)
+                                        if require_sig: passes = passes and pd.notna(qcorr) and (qcorr < 0.05)
+
+                                        if passes:
+                                            edge_rows_global.append({
+                                                "edge_id": edge_counter,
+                                                "source": src,
+                                                "target": dst,
+                                                "approx_bf10": bf,
+                                                "q_value": qcorr
+                                            })
+                                            edge_counter += 1
+
+                                edge_stats_global = pd.DataFrame(edge_rows_global)
+
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    fig_hm = px.imshow(bf_mat.astype(float), color_continuous_scale="YlOrRd", title="Approx. BF₁₀ Adjacency Matrix")
+                                    st.plotly_chart(fig_hm, use_container_width=True)
+                                with col2:
+                                    fig_q = px.imshow(pval_mat_corr.astype(float), color_continuous_scale="RdYlGn_r", title="FDR-corrected Q-values", zmin=0, zmax=0.1)
+                                    st.plotly_chart(fig_q, use_container_width=True)
+
+                                # RESTORED DIRECTED GRAPH VISUALIZATION
+                                st.markdown("##### Directed Spillover Graph")
+                                if edge_stats_global.empty:
+                                    st.info("No qualifying relationships detected under the current thresholds.")
+                                else:
+                                    draw_directed_network(common, f"Global Granger Network", edge_stats_df=edge_stats_global)
+                                    
+                                    st.markdown("##### Detailed Edge Statistics")
+                                    st.dataframe(edge_stats_global.rename(columns={"edge_id": "ID", "source": "From", "target": "To", "approx_bf10": "Approx. BF₁₀", "q_value": "Q-value"}), use_container_width=True)
 
     except Exception as e:
         st.error("🚨 An unexpected error occurred. Please check your selections and try again.")
