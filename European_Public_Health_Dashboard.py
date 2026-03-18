@@ -1254,7 +1254,7 @@ Notes:
             """
             <div style='text-align: center; color: gray; padding: 20px;'>
             <p>European Public Health Dashboard v3.0</p>
-            <p>Data Source: Eurostat | Analysis Framework: Time Series, Spatial Methods, and Border-Constrained Granger Networks</p>
+            <p>Data Source: Eurostat</p>
             </div>
             """,
             unsafe_allow_html=True
