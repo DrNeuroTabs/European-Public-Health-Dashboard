@@ -1018,7 +1018,7 @@ def main():
             ]
 
             if analysis_type == "Neighbor-Based Analysis":
-                st.subheader(f"🎯 Focal Country: {country_full} & Neighbors")
+                st.subheader(f"Focal Country: {country_full} & Neighbors")
                 
                 nbrs = NEIGHBORS.get(country_code, [])
                 if not nbrs:
