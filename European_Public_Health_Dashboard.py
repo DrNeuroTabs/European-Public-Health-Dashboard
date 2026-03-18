@@ -76,30 +76,100 @@ REV_SEX_NAME = {v: k for k, v in SEX_NAME_MAP.items()}
 AGE_NAME_MAP = {"TOTAL": "All Ages", "Y_LT65": "Under 65 (Premature)", "Y_GE65": "65 and Over"}
 REV_AGE_NAME_MAP = {v: k for k, v in AGE_NAME_MAP.items()}
 
+# Restored FULL cause map
 CAUSE_NAME_MAP = {
     "TOTAL": "Total",
-    "A_B": "Certain infectious and parasitic diseases",
+    "A_B": "Certain infectious and parasitic diseases (A00-B99)",
+    "A15-A19_B90": "Tuberculosis",
+    "B15-B19_B942": "Viral hepatitis and sequelae of viral hepatitis",
+    "B180-B182": "Chronic viral hepatitis B and C",
+    "B20-B24": "Human immunodeficiency virus [HIV] disease",
+    "A_B_OTH": "Other infectious and parasitic diseases (A00-B99)",
     "C00-D48": "Neoplasms",
-    "C": "Malignant neoplasms",
+    "C": "Malignant neoplasms (C00-C97)",
+    "C00-C14": "Malignant neoplasm of lip, oral cavity, pharynx",
+    "C15": "Malignant neoplasm of oesophagus",
+    "C16": "Malignant neoplasm of stomach",
+    "C18-C21": "Malignant neoplasm of colon, rectum, anus",
+    "C22": "Malignant neoplasm of liver and intrahepatic bile ducts",
+    "C25": "Malignant neoplasm of pancreas",
+    "C32": "Malignant neoplasm of larynx",
     "C33_C34": "Malignant neoplasm of trachea, bronchus and lung",
+    "C43": "Malignant melanoma of skin",
     "C50": "Malignant neoplasm of breast",
+    "C53": "Malignant neoplasm of cervix uteri",
+    "C54_C55": "Malignant neoplasm of other parts of uterus",
+    "C56": "Malignant neoplasm of ovary",
     "C61": "Malignant neoplasm of prostate",
+    "C64": "Malignant neoplasm of kidney, except renal pelvis",
+    "C67": "Malignant neoplasm of bladder",
+    "C70-C72": "Malignant neoplasm of brain and CNS",
+    "C73": "Malignant neoplasm of thyroid gland",
+    "C81-C86": "Hodgkin disease and lymphomas",
+    "C88_C90_C96": "Other lymphoid & haematopoietic neoplasms",
+    "C91-C95": "Leukaemia",
+    "C_OTH": "Other malignant neoplasms (C00-C97)",
+    "D00-D48": "Non-malignant neoplasms",
+    "D50-D89": "Diseases of blood & blood-forming organs",
     "E": "Endocrine, nutritional & metabolic diseases",
     "E10-E14": "Diabetes mellitus",
+    "E_OTH": "Other endocrine, nutritional & metabolic diseases",
     "F": "Mental & behavioural disorders",
     "F01_F03": "Dementia",
+    "F10": "Alcohol-related mental disorders",
+    "TOXICO": "Drug dependence & toxicomania",
+    "F_OTH": "Other mental & behavioural disorders",
     "G_H": "Nervous system & sense organs diseases",
+    "G20": "Parkinson disease",
     "G30": "Alzheimer disease",
+    "G_H_OTH": "Other nervous system & sense organ diseases",
     "I": "Circulatory system diseases",
     "I20-I25": "Ischaemic heart diseases",
+    "I21_I22": "Acute myocardial infarction",
+    "I20_I23-I25": "Other ischaemic heart diseases",
+    "I30-I51": "Other heart diseases",
     "I60-I69": "Cerebrovascular diseases",
+    "I_OTH": "Other circulatory diseases",
     "J": "Respiratory system diseases",
+    "J09-J11": "Influenza (including swine flu)",
     "J12-J18": "Pneumonia",
+    "J40-J47": "Chronic lower respiratory diseases",
+    "J45_J46": "Asthma",
+    "J40-J44_J47": "Other lower respiratory diseases",
+    "J_OTH": "Other respiratory diseases",
     "K": "Digestive system diseases",
+    "K25-K28": "Ulcer of stomach & duodenum",
+    "K70_K73_K74": "Chronic liver disease",
+    "K72-K75": "Other liver diseases",
+    "K_OTH": "Other digestive diseases",
+    "L": "Skin & subcutaneous tissue diseases",
+    "M": "Musculoskeletal system diseases",
+    "RHEUM_ARTHRO": "Rheumatoid arthritis & arthrosis",
+    "M_OTH": "Other musculoskeletal diseases",
+    "N": "Genitourinary system diseases",
+    "N00-N29": "Kidney & ureter diseases",
+    "N_OTH": "Other genitourinary diseases",
+    "O": "Pregnancy, childbirth & puerperium",
+    "P": "Perinatal conditions",
+    "Q": "Congenital malformations, deformations and chromosomal abnormalities",
+    "R": "Symptoms & abnormal clinical and laboratory findings",
+    "R95": "Sudden infant death syndrome",
+    "R96-R99": "Ill-defined & unknown causes of mortality",
+    "R_OTH": "Other signs & lab findings",
     "V01-Y89": "External causes of morbidity and mortality",
     "ACC": "Accidents",
+    "V_Y85": "Transport accidents",
+    "ACC_OTH": "Other accidents",
+    "W00-W19": "Falls",
+    "W65-W74": "Accidental drowning and submersion",
     "X60-X84_Y870": "Intentional self-harm",
-    "U071": "COVID-19, virus identified"
+    "X40-X49": "Accidental poisoning by and exposure to noxious substances",
+    "X85-Y09_Y871": "Assault",
+    "Y10-Y34_Y872": "Event of undetermined intent",
+    "V01-Y89_OTH": "Other external causes of morbidity and mortality",
+    "A-R_V-Y": "All causes (A00-R99 & V01-Y89)",
+    "U071": "COVID-19, virus identified",
+    "U072": "COVID-19, virus not identified"
 }
 REV_CAUSE_NAME_MAP = {v: k for k, v in CAUSE_NAME_MAP.items()}
 
@@ -169,7 +239,6 @@ def load_eurostat_series(dataset_id: str) -> pd.DataFrame:
 
     mask = pd.Series(True, index=long.index)
     
-    # Specific Unit Filters to keep data clean
     if "unit" in dims:
         uv = "RT" if "RT" in long["unit"].unique() else ("NR" if "NR" in long["unit"].unique() else None)
         if dataset_id == "sdg_08_10": uv = "CLV10_EUR_HAB"
@@ -178,7 +247,6 @@ def load_eurostat_series(dataset_id: str) -> pd.DataFrame:
     if "freq" in dims:
         mask &= (long["freq"] == "A")
         
-    # Extract multiple age groups instead of just TOTAL
     if "age" in dims:
         mask &= (long["age"].isin(["TOTAL", "Y_LT65", "Y_GE65"]))
         
@@ -190,18 +258,16 @@ def load_eurostat_series(dataset_id: str) -> pd.DataFrame:
     rename = {"geo": "Country", "sex": "Sex", "age": "Age"}
     others = [d for d in dims if d not in ("geo", "sex", "age", "freq", "unit", "resid")]
     if len(others) >= 1:
-        rename[others[0]] = "Cause" # Or Factor
+        rename[others[0]] = "Cause" 
         
     out = sub.rename(columns=rename)
     
-    # Default missing dimensions
     if "Age" not in out.columns: out["Age"] = "TOTAL"
     if "Sex" not in out.columns: out["Sex"] = "T"
     if "Cause" not in out.columns: out["Cause"] = "TOTAL"
         
     cols = ["Country", "Year", "Cause", "Sex", "Age", "Rate"]
     return out[[c for c in cols if c in out.columns]]
-
 
 @st.cache_data
 def load_data() -> pd.DataFrame:
@@ -214,7 +280,6 @@ def load_data() -> pd.DataFrame:
     mod = mod[mod["Country"].str.fullmatch(r"[A-Z]{2}")]
     df = pd.concat([hist, mod], ignore_index=True).sort_values(["Country", "Cause", "Sex", "Age", "Year"])
 
-    # Aggregate for EU and Europe
     df_eu = df[df["Country"].isin(EU_CODES)].groupby(["Year", "Cause", "Sex", "Age"], as_index=False)["Rate"].mean()
     df_eu["Country"] = "EU"
 
@@ -222,7 +287,6 @@ def load_data() -> pd.DataFrame:
     df_eur["Country"] = "Europe"
 
     return pd.concat([df, df_eu, df_eur], ignore_index=True)
-
 
 @st.cache_data
 def load_all_factors() -> pd.DataFrame:
@@ -281,7 +345,6 @@ def compute_changepoints_and_apc(df_sub: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(recs)
 
 def detect_anomalies(df_sub: pd.DataFrame, threshold: float = 2.5) -> pd.DataFrame:
-    """Flags years where the rate deviates significantly from the mean (Z-score based)"""
     res = []
     for sex in df_sub["Sex"].unique():
         part = df_sub[df_sub["Sex"] == sex].copy()
@@ -297,7 +360,9 @@ def detect_anomalies(df_sub: pd.DataFrame, threshold: float = 2.5) -> pd.DataFra
     return df_sub.assign(Z_Score=0, Is_Anomaly=False)
 
 def forecast_mortality(df_sub: pd.DataFrame, periods: int, method: str) -> pd.DataFrame:
-    # Prophet
+    if df_sub.empty or len(df_sub) < 3:
+        return pd.DataFrame(columns=["Year", "History", "Forecast"])
+        
     dfp = df_sub[["Year", "Rate"]].rename(columns={"Year": "ds", "Rate": "y"}).copy()
     dfp["ds"] = pd.to_datetime(dfp["ds"].astype(str) + "-01-01", format="%Y-%m-%d")
     m = Prophet(yearly_seasonality=False, daily_seasonality=False, weekly_seasonality=False)
@@ -306,17 +371,14 @@ def forecast_mortality(df_sub: pd.DataFrame, periods: int, method: str) -> pd.Da
     fc_prophet = m.predict(fut)[["ds", "yhat"]].rename(columns={"yhat": "Prophet"})
     fc_prophet["Year"] = fc_prophet["ds"].dt.year
     
-    # ARIMA
     ser = df_sub.set_index("Year")["Rate"]
     ari_preds = ARIMA(ser, order=(1, 1, 1)).fit().forecast(periods)
     yrs = np.arange(ser.index.max() + 1, ser.index.max() + 1 + periods)
     fc_arima = pd.DataFrame({"Year": yrs, "ARIMA": ari_preds.values})
     
-    # ETS
     ets_preds = ExponentialSmoothing(ser, trend="add", seasonal=None).fit(optimized=True).forecast(periods)
     fc_ets = pd.DataFrame({"Year": yrs, "ETS": ets_preds.values})
     
-    # Combine
     fc = fc_prophet.merge(fc_arima, on="Year", how="outer").merge(fc_ets, on="Year", how="outer")
     
     if method == "Prophet": fc["Forecast"] = fc["Prophet"]
@@ -442,7 +504,6 @@ def main():
         forecast_yrs = st.sidebar.slider("Forecast Horizon (years)", 1, 30, 10)
         method = st.sidebar.selectbox("Forecast Method", ["Ensemble", "Prophet", "ARIMA", "ETS"])
 
-        # Core filtered dataframe for current view
         df_filtered = df[
             (df["Country"] == country_code) &
             (df["Cause"] == cause_code) &
@@ -470,13 +531,11 @@ def main():
             if df_filtered.empty:
                 st.warning("⚠️ No data available for selected filters.")
             else:
-                # Outlier & Segment Detection
                 df_anom = detect_anomalies(df_filtered)
                 changepoint_df = compute_changepoints_and_apc(df_filtered)
 
                 st.subheader("🔍 Trend Segmentation & Outlier Detection")
                 
-                # Segmented Plot
                 sub = df_filtered.sort_values("Year")
                 fig = go.Figure()
                 
@@ -486,10 +545,8 @@ def main():
                     bkps = detect_change_points(rates_arr)[:-1]
                     segs = np.split(np.arange(len(yrs_arr)), bkps) if bkps else [np.arange(len(yrs_arr))]
 
-                    # Draw observed line
                     fig.add_trace(go.Scatter(x=yrs_arr, y=rates_arr, mode="markers+lines", name=f"Observed ({sf})", opacity=0.4))
                     
-                    # Draw Outliers
                     anoms = df_anom[(df_anom["Sex"] == sc) & (df_anom["Is_Anomaly"] == True)]
                     if not anoms.empty:
                         fig.add_trace(go.Scatter(
@@ -498,7 +555,6 @@ def main():
                             name=f"Anomaly ({sf})"
                         ))
 
-                    # Draw Segments
                     palette = px.colors.qualitative.Dark24
                     for i, seg in enumerate(segs):
                         idx, vals = yrs_arr[seg], rates_arr[seg]
@@ -514,24 +570,29 @@ def main():
                 st.plotly_chart(fig, use_container_width=True)
 
                 st.markdown("#### Segment Statistics")
-                st.dataframe(changepoint_df.style.format({"slope": "{:.2f}", "APC_pct": "{:.2f}%"}), use_container_width=True)
+                if not changepoint_df.empty:
+                    st.dataframe(changepoint_df.style.format({"slope": "{:.2f}", "APC_pct": "{:.2f}%"}), use_container_width=True)
+                else:
+                    st.info("No significant segments detected.")
 
-                # Forecasting
                 st.subheader(f"🔮 {forecast_yrs}-Year Forecast ({method})")
                 forecast_cols = st.columns(len(sex_sel))
                 for idx, (sc, sf) in enumerate(zip(sex_codes, sex_sel)):
                     fc = forecast_mortality(df_filtered[df_filtered["Sex"] == sc], forecast_yrs, method)
                     with forecast_cols[idx]:
-                        fig_fc = px.line(fc, x="Year", y=["History", "Forecast"], title=f"{sf}")
-                        fig_fc.add_vline(x=year_range[1], line_dash="dash", line_color="gray", opacity=0.5)
-                        st.plotly_chart(fig_fc, use_container_width=True)
+                        if not fc.empty:
+                            fig_fc = px.line(fc, x="Year", y=["History", "Forecast"], title=f"{sf}")
+                            fig_fc.add_vline(x=year_range[1], line_dash="dash", line_color="gray", opacity=0.5)
+                            st.plotly_chart(fig_fc, use_container_width=True)
+                        else:
+                            st.warning(f"Not enough data to forecast for {sf}.")
 
         # ======================================================================
         # TAB 2: CROSS-CAUSE COMPARISON
         # ======================================================================
         with tab2:
             st.header("⚖️ Cross-Cause Trend Comparison (Displacement Analysis)")
-            st.info("Compare two different causes of death to identify inverse relationships (e.g., dropping cardiovascular vs rising neurological deaths). Rates are normalized to 100 at the start year for clean comparison.")
+            st.info("Compare two different causes of death to identify inverse relationships. Rates are normalized to 100 at the start year.")
             
             col_c1, col_c2 = st.columns(2)
             with col_c1:
@@ -551,8 +612,7 @@ def main():
             
             if not df_compare.empty and c1_code != c2_code:
                 pivot_comp = df_compare.pivot(index="Year", columns="Cause", values="Rate").dropna()
-                if len(pivot_comp) > 2:
-                    # Normalize to 100
+                if len(pivot_comp) > 2 and c1_code in pivot_comp.columns and c2_code in pivot_comp.columns:
                     norm_comp = (pivot_comp / pivot_comp.iloc[0]) * 100
                     
                     fig_comp = go.Figure()
@@ -562,7 +622,7 @@ def main():
                     st.plotly_chart(fig_comp, use_container_width=True)
                     
                     corr = pivot_comp[c1_code].corr(pivot_comp[c2_code])
-                    st.metric("Pearson Correlation Coefficient", f"{corr:.3f}", help="Close to -1 implies strong displacement (one rises, other falls)")
+                    st.metric("Pearson Correlation Coefficient", f"{corr:.3f}", help="Close to -1 implies strong displacement")
                 else:
                     st.warning("Not enough overlapping years between the two causes to compare.")
 
@@ -589,33 +649,44 @@ def main():
                     (df["Cause"] == cause_code) &
                     (df["Age"] == age_code) &
                     (df["Year"].between(*year_range)) &
-                    (df["Sex"] == "T") # Panel regression simplifies by looking at Total
+                    (df["Sex"] == "T")
                 ][["Country", "Year", "Rate"]].rename(columns={"Rate": "Mortality"})
 
-                panel = pf.pivot_table(index=["Country", "Year"], columns="FactorName", values="Rate").reset_index()
-                panel = panel.merge(pm, on=["Country", "Year"], how="inner")
-
-                present = [f for f in factors if f in panel.columns]
-                panel_clean = panel.dropna(subset=present + ["Mortality"])
-
-                if panel_clean.shape[0] < len(present) * 3:
-                    st.warning("⚠️ Insufficient continuous observations for reliable regression.")
+                if pf.empty or pm.empty:
+                    st.warning("⚠️ No factor or mortality data available for the selected filters.")
                 else:
-                    X = sm.add_constant(panel_clean[present])
-                    y = panel_clean["Mortality"]
-                    mdl = sm.OLS(y, X).fit()
+                    panel = pf.pivot_table(index=["Country", "Year"], columns="FactorName", values="Rate").reset_index()
+                    panel = panel.merge(pm, on=["Country", "Year"], how="inner")
 
-                    col_r1, col_r2 = st.columns([3, 2])
-                    with col_r1:
-                        st.text(mdl.summary())
-                    with col_r2:
-                        reg_coefs = mdl.params.drop("const")
-                        fig_coef = go.Figure(go.Bar(
-                            x=reg_coefs.values, y=reg_coefs.index, orientation="h",
-                            marker_color=["green" if x < 0 else "red" for x in reg_coefs.values]
-                        ))
-                        fig_coef.update_layout(title="Factor Coefficients (Effect on Mortality)")
-                        st.plotly_chart(fig_coef, use_container_width=True)
+                    present = [f for f in factors if f in panel.columns]
+                    
+                    if not present:
+                        st.warning("⚠️ None of the selected factors have matching data for this cohort.")
+                    else:
+                        panel_clean = panel.dropna(subset=present + ["Mortality"])
+
+                        # The safety check that fixes the previous crash
+                        if panel_clean.empty or panel_clean.shape[0] < len(present) + 2:
+                            st.warning(f"⚠️ Insufficient continuous observations (found {panel_clean.shape[0]}) for reliable regression.")
+                        else:
+                            try:
+                                X = sm.add_constant(panel_clean[present])
+                                y = panel_clean["Mortality"]
+                                mdl = sm.OLS(y, X).fit()
+
+                                col_r1, col_r2 = st.columns([3, 2])
+                                with col_r1:
+                                    st.text(mdl.summary())
+                                with col_r2:
+                                    reg_coefs = mdl.params.drop("const")
+                                    fig_coef = go.Figure(go.Bar(
+                                        x=reg_coefs.values, y=reg_coefs.index, orientation="h",
+                                        marker_color=["green" if x < 0 else "red" for x in reg_coefs.values]
+                                    ))
+                                    fig_coef.update_layout(title="Factor Coefficients (Effect on Mortality)")
+                                    st.plotly_chart(fig_coef, use_container_width=True)
+                            except ValueError as e:
+                                st.warning("⚠️ Could not compute regression. The data might be perfectly collinear or contain invalid mathematical shapes for OLS.")
 
         # ======================================================================
         # TAB 4: SPATIAL & CLUSTERS
@@ -629,7 +700,7 @@ def main():
                 (df["Sex"] == "T") & 
                 (df["Age"] == age_code) &
                 (df["Year"].between(*year_range)) &
-                (df["Country"].str.len() == 2) # Ignore EU/Europe aggregates
+                (df["Country"].str.len() == 2) 
             ].copy()
             
             anim_df["iso_alpha"] = anim_df["Country"].apply(alpha3_from_a2)
@@ -698,7 +769,7 @@ def main():
                 st.warning("Insufficient continuous data for network generation.")
             else:
                 if st.button("🚀 Generate Global Spillover Network"):
-                    with st.spinner("Running pairwise OLS models and calculating FDR corrections..."):
+                    with st.spinner("Running pairwise OLS models..."):
                         bf_mat = pd.DataFrame(np.nan, index=valid_countries, columns=valid_countries)
                         
                         for src in valid_countries:
