@@ -388,6 +388,28 @@ def forecast_mortality(df_sub: pd.DataFrame, periods: int, method: str) -> pd.Da
     hist = df_sub[["Year", "Rate"]].rename(columns={"Rate": "History"})
     return hist.merge(fc[["Year", "Forecast"]], on="Year", how="outer")
 
+def compare_with_benchmark(df, country_code, cause_code, age_code, year_range):
+    country_data = df[
+        (df["Country"] == country_code) &
+        (df["Cause"] == cause_code) &
+        (df["Age"] == age_code) &
+        (df["Sex"] == "T") &
+        (df["Year"].between(*year_range))
+    ][["Year", "Rate"]].rename(columns={"Rate": "Country"})
+
+    eu_data = df[
+        (df["Country"] == "EU") &
+        (df["Cause"] == cause_code) &
+        (df["Age"] == age_code) &
+        (df["Sex"] == "T") &
+        (df["Year"].between(*year_range))
+    ][["Year", "Rate"]].rename(columns={"Rate": "EU Average"})
+
+    comparison = country_data.merge(eu_data, on="Year")
+    comparison["Difference"] = comparison["Country"] - comparison["EU Average"]
+    comparison["Pct_Difference"] = (comparison["Difference"] / comparison["EU Average"]) * 100
+    return comparison
+
 # --------------------------------------------------------------------------
 # SPATIAL & NETWORK HELPERS
 # --------------------------------------------------------------------------
@@ -596,7 +618,7 @@ def draw_directed_network(nodes, title, edge_stats_df=None):
         plt.close("all")
 
 # --------------------------------------------------------------------------
-# MAIN APPLICATION & TABS
+# MAIN APPLICATION
 # --------------------------------------------------------------------------
 def main():
     try:
@@ -638,6 +660,7 @@ def main():
         forecast_yrs = st.sidebar.slider("Forecast Horizon (years)", 1, 30, 10)
         method = st.sidebar.selectbox("Forecast Method", ["Ensemble", "Prophet", "ARIMA", "ETS"])
 
+        # Core dataframe for current view
         df_filtered = df[
             (df["Country"] == country_code) &
             (df["Cause"] == cause_code) &
@@ -645,6 +668,19 @@ def main():
             (df["Sex"].isin(sex_codes)) &
             (df["Year"].between(*year_range))
         ]
+
+        # Initialize export variables (safeguard for the zip export if tabs aren't visited)
+        changepoint_df = pd.DataFrame()
+        forecasts = {}
+        panel_clean = pd.DataFrame()
+        reg_coefs = pd.Series(dtype=float)
+        clust_df_map = pd.DataFrame()
+        bf_n = pd.DataFrame()
+        pval_n_corr = pd.DataFrame()
+        edge_stats_n = pd.DataFrame()
+        bf_mat = pd.DataFrame()
+        pval_mat_corr = pd.DataFrame()
+        edge_stats_global = pd.DataFrame()
 
         # --- APP TABS ---
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -713,6 +749,7 @@ def main():
                 forecast_cols = st.columns(len(sex_sel))
                 for idx, (sc, sf) in enumerate(zip(sex_codes, sex_sel)):
                     fc = forecast_mortality(df_filtered[df_filtered["Sex"] == sc], forecast_yrs, method)
+                    forecasts[sf] = fc
                     with forecast_cols[idx]:
                         if not fc.empty:
                             fig_fc = px.line(fc, x="Year", y=["History", "Forecast"], title=f"{sf}")
@@ -720,6 +757,59 @@ def main():
                             st.plotly_chart(fig_fc, use_container_width=True)
                         else:
                             st.warning(f"Not enough data to forecast for {sf}.")
+
+                # RESTORED BENCHMARK COMPARISON
+                if country_code not in ["EU", "Europe"]:
+                    st.markdown("---")
+                    st.subheader("📊 Benchmark Comparison with EU Average")
+                    try:
+                        benchmark = compare_with_benchmark(df, country_code, cause_code, age_code, year_range)
+
+                        if not benchmark.empty and len(benchmark) > 0:
+                            fig_bench = make_subplots(
+                                rows=2, cols=1,
+                                subplot_titles=("Absolute Rates", "Percentage Difference from EU"),
+                                vertical_spacing=0.15
+                            )
+
+                            fig_bench.add_trace(
+                                go.Scatter(x=benchmark["Year"], y=benchmark["Country"], mode="lines+markers", name=country_full, line=dict(width=3)),
+                                row=1, col=1
+                            )
+                            fig_bench.add_trace(
+                                go.Scatter(x=benchmark["Year"], y=benchmark["EU Average"], mode="lines+markers", name="EU Average", line=dict(width=3, dash="dash")),
+                                row=1, col=1
+                            )
+
+                            fig_bench.add_trace(
+                                go.Bar(
+                                    x=benchmark["Year"], y=benchmark["Pct_Difference"],
+                                    marker_color=np.where(benchmark["Pct_Difference"] > 0, "red", "green"),
+                                    showlegend=False
+                                ),
+                                row=2, col=1
+                            )
+                            fig_bench.add_hline(y=0, line_dash="dash", line_color="black", row=2, col=1)
+
+                            fig_bench.update_xaxes(title_text="Year", row=2, col=1)
+                            fig_bench.update_yaxes(title_text="Rate", row=1, col=1)
+                            fig_bench.update_yaxes(title_text="% Difference", row=2, col=1)
+                            fig_bench.update_layout(height=700, showlegend=True)
+
+                            st.plotly_chart(fig_bench, use_container_width=True)
+
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Average Rate (Country)", f"{benchmark['Country'].mean():.1f}")
+                            with col2:
+                                st.metric("Average Rate (EU)", f"{benchmark['EU Average'].mean():.1f}")
+                            with col3:
+                                avg_diff = benchmark["Pct_Difference"].mean()
+                                st.metric("Average Difference", f"{avg_diff:+.1f}%", delta=f"{'Above' if avg_diff > 0 else 'Below'} EU avg")
+                        else:
+                            st.info("Benchmark comparison data not available for selected period")
+                    except Exception as e:
+                        st.warning(f"Could not compute benchmark comparison: {str(e)}")
 
         # ======================================================================
         # TAB 2: CROSS-CAUSE COMPARISON
@@ -827,8 +917,7 @@ def main():
         with tab4:
             st.header("🗺️ Spatial Analysis & Clusters")
             
-            st.subheader("Time-Lapse: Spread of Mortality Rates")
-            anim_df = df[
+            df_spatial = df[
                 (df["Cause"] == cause_code) & 
                 (df["Sex"] == "T") & 
                 (df["Age"] == age_code) &
@@ -836,13 +925,14 @@ def main():
                 (df["Country"].str.len() == 2) 
             ].copy()
             
-            anim_df["iso_alpha"] = anim_df["Country"].apply(alpha3_from_a2)
+            df_spatial["iso_alpha"] = df_spatial["Country"].apply(alpha3_from_a2)
             
-            if not anim_df.empty:
+            st.subheader("Time-Lapse: Spread of Mortality Rates")
+            if not df_spatial.empty:
                 fig_map = px.choropleth(
-                    anim_df, locations="iso_alpha", color="Rate", hover_name="CountryFull",
+                    df_spatial, locations="iso_alpha", color="Rate", hover_name="CountryFull",
                     animation_frame="Year", locationmode="ISO-3", scope="europe",
-                    color_continuous_scale="Reds", range_color=[anim_df["Rate"].min(), anim_df["Rate"].max()]
+                    color_continuous_scale="Reds", range_color=[df_spatial["Rate"].min(), df_spatial["Rate"].max()]
                 )
                 fig_map.update_layout(height=600, margin={"r":0,"t":0,"l":0,"b":0})
                 st.plotly_chart(fig_map, use_container_width=True)
@@ -852,7 +942,7 @@ def main():
             
             with col_sp1:
                 st.subheader("Spatial Autocorrelation (Moran's I)")
-                spatial_year = st.selectbox("Select Year", sorted(anim_df["Year"].unique(), reverse=True))
+                spatial_year = st.selectbox("Select Year", sorted(df_spatial["Year"].unique(), reverse=True))
                 spatial_result = compute_spatial_autocorrelation(df, spatial_year, cause_code, "T", age_code)
                 if spatial_result:
                     mi = spatial_result['morans_i']
@@ -863,7 +953,7 @@ def main():
 
             with col_sp2:
                 st.subheader("Dynamic K-Means Clustering")
-                pivot_clust = anim_df.pivot(index="Country", columns="Year", values="Rate").dropna(axis=0, how="any")
+                pivot_clust = df_spatial.pivot(index="Country", columns="Year", values="Rate").dropna(axis=0, how="any")
                 if pivot_clust.shape[0] > 5:
                     best_k, best_score = 2, -1
                     X_clust = pivot_clust.values
@@ -888,9 +978,22 @@ def main():
                     )
                     fig_cluster_map.update_layout(height=400, margin={"r":0,"t":0,"l":0,"b":0})
                     st.plotly_chart(fig_cluster_map, use_container_width=True)
-                    
-                    with st.expander("View Cluster Assignments"):
-                        st.dataframe(pivot_clust[["Cluster"]].reset_index(), use_container_width=True)
+
+            # RESTORED CLUSTER TRAJECTORIES
+            if pivot_clust.shape[0] > 5:
+                st.markdown("---")
+                st.subheader("Cluster Characteristics & Average Trajectories")
+                for cluster in sorted(pivot_clust["Cluster"].unique()):
+                    with st.expander(f"View {cluster} Details"):
+                        c_codes = pivot_clust[pivot_clust["Cluster"] == cluster].index
+                        c_names = [COUNTRY_NAME_MAP.get(c, c) for c in c_codes]
+                        st.write(f"**Countries in this cluster:** {', '.join(c_names)}")
+                        
+                        c_data = df_spatial[df_spatial["Country"].isin(c_codes)]
+                        if not c_data.empty:
+                            avg_traj = c_data.groupby("Year")["Rate"].mean().reset_index()
+                            fig_traj = px.line(avg_traj, x="Year", y="Rate", title=f"Average Trajectory - {cluster}")
+                            st.plotly_chart(fig_traj, use_container_width=True)
 
         # ======================================================================
         # TAB 5: GRANGER NETWORK
@@ -950,14 +1053,24 @@ def main():
 
                                 pval_n_corr = apply_fdr_correction(pval_n, allowed_n)
 
+                                # FIX NAMES FOR DISPLAY
+                                mapped_common_n = [COUNTRY_NAME_MAP.get(c, c) for c in common_n]
+                                bf_n.index = mapped_common_n
+                                bf_n.columns = mapped_common_n
+                                pval_n_corr.index = mapped_common_n
+                                pval_n_corr.columns = mapped_common_n
+
                                 edge_rows_n = []
                                 edge_counter = 1
 
                                 for src in common_n:
                                     for dst in common_n:
                                         if src == dst or not allowed_n.loc[src, dst]: continue
-                                        bf = bf_n.loc[src, dst]
-                                        qcorr = pval_n_corr.loc[src, dst]
+                                        src_name = COUNTRY_NAME_MAP.get(src, src)
+                                        dst_name = COUNTRY_NAME_MAP.get(dst, dst)
+                                        
+                                        bf = bf_n.loc[src_name, dst_name]
+                                        qcorr = pval_n_corr.loc[src_name, dst_name]
 
                                         passes = pd.notna(bf) and (bf >= bf_thresh)
                                         if require_sig: passes = passes and pd.notna(qcorr) and (qcorr < 0.05)
@@ -965,24 +1078,30 @@ def main():
                                         if passes:
                                             edge_rows_n.append({
                                                 "edge_id": edge_counter,
-                                                "source": COUNTRY_NAME_MAP.get(src, src),
-                                                "target": COUNTRY_NAME_MAP.get(dst, dst),
+                                                "source": src_name,
+                                                "target": dst_name,
                                                 "approx_bf10": bf,
                                                 "q_value": qcorr
                                             })
                                             edge_counter += 1
 
                                 edge_stats_n = pd.DataFrame(edge_rows_n)
-                                nodes_n = [COUNTRY_NAME_MAP.get(c, c) for c in common_n]
+
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    fig_hm = px.imshow(bf_n.astype(float), color_continuous_scale="YlOrRd", title="Approx. BF₁₀ Adjacency Matrix")
+                                    st.plotly_chart(fig_hm, use_container_width=True)
+                                with col2:
+                                    fig_q = px.imshow(pval_n_corr.astype(float), color_continuous_scale="RdYlGn_r", title="FDR-corrected Q-values", zmin=0, zmax=0.1)
+                                    st.plotly_chart(fig_q, use_container_width=True)
 
                                 # RESTORED DIRECTED GRAPH VISUALIZATION
                                 st.markdown("##### Directed Spillover Graph")
                                 if edge_stats_n.empty:
                                     st.info("No qualifying Granger relationships detected under the current thresholds.")
                                 else:
-                                    draw_directed_network(nodes_n, f"Neighbor Granger Network", edge_stats_df=edge_stats_n)
+                                    draw_directed_network(mapped_common_n, f"Neighbor Granger Network", edge_stats_df=edge_stats_n)
                                     
-                                    # Detailed DataFrames Below Graph
                                     st.markdown("##### Detailed Edge Statistics")
                                     st.dataframe(edge_stats_n.rename(columns={"edge_id": "ID", "source": "From", "target": "To", "approx_bf10": "Approx. BF₁₀", "q_value": "Q-value"}), use_container_width=True)
 
@@ -1069,6 +1188,77 @@ def main():
                                     
                                     st.markdown("##### Detailed Edge Statistics")
                                     st.dataframe(edge_stats_global.rename(columns={"edge_id": "ID", "source": "From", "target": "To", "approx_bf10": "Approx. BF₁₀", "q_value": "Q-value"}), use_container_width=True)
+
+        # ======================================================================
+        # SECTION 6: DOWNLOAD REPORT (RESTORED AT BOTTOM)
+        # ======================================================================
+        st.markdown("---")
+        st.header("📥 Download Analysis Report")
+
+        zip_buf = BytesIO()
+        with zipfile.ZipFile(zip_buf, "w") as zf:
+            if not changepoint_df.empty:
+                zf.writestr("changepoints_apc.csv", changepoint_df.to_csv(index=False))
+
+            for sf, fc in forecasts.items():
+                if not fc.empty:
+                    zf.writestr(f"forecast_{sf}.csv", fc.to_csv(index=False))
+
+            if not panel_clean.empty:
+                zf.writestr("regression_panel_data.csv", panel_clean.to_csv(index=False))
+                zf.writestr("regression_coefficients.csv", reg_coefs.to_frame("Coefficient").to_csv())
+
+            if not clust_df_map.empty:
+                zf.writestr("cluster_assignments.csv", clust_df_map.to_csv(index=False))
+
+            if not bf_mat.empty:
+                zf.writestr("global_granger_approx_bf10.csv", bf_mat.to_csv())
+            if not pval_mat_corr.empty:
+                zf.writestr("global_granger_qvalues_fdr.csv", pval_mat_corr.to_csv())
+            if not edge_stats_global.empty:
+                zf.writestr("global_network_edges.csv", edge_stats_global.to_csv(index=False))
+
+            if not bf_n.empty:
+                zf.writestr("neighbor_granger_approx_bf10.csv", bf_n.to_csv())
+            if not pval_n_corr.empty:
+                zf.writestr("neighbor_granger_qvalues_fdr.csv", pval_n_corr.to_csv())
+            if not edge_stats_n.empty:
+                zf.writestr("neighbor_network_edges.csv", edge_stats_n.to_csv(index=False))
+
+            metadata = f"""
+European Public Health Dashboard - Analysis Report
+Generated: {pd.Timestamp.now()}
+
+Analysis Parameters:
+- Country: {country_full}
+- Cause: {cause_full}
+- Age Cohort: {age_sel}
+- Period: {year_range[0]}-{year_range[1]}
+
+Notes:
+- Network datasets are only included if the respective network generator buttons were clicked before downloading.
+- P-values in network sections are FDR-corrected into q-values.
+"""
+            zf.writestr("README.txt", metadata)
+
+        zip_buf.seek(0)
+        st.download_button(
+            label="📦 Download Complete Analysis Report (ZIP)",
+            data=zip_buf,
+            file_name=f"health_analysis_{country_code}_{cause_code}_{pd.Timestamp.now().strftime('%Y%m%d')}.zip",
+            mime="application/zip",
+            type="primary"
+        )
+
+        st.markdown(
+            """
+            <div style='text-align: center; color: gray; padding: 20px;'>
+            <p>European Public Health Dashboard v3.0</p>
+            <p>Data Source: Eurostat | Analysis Framework: Time Series, Spatial Methods, and Border-Constrained Granger Networks</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
     except Exception as e:
         st.error("🚨 An unexpected error occurred. Please check your selections and try again.")
