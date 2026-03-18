@@ -622,7 +622,7 @@ def draw_directed_network(nodes, title, edge_stats_df=None):
 # --------------------------------------------------------------------------
 def main():
     try:
-        st.set_page_config(layout="wide", page_title="Euro Health Dashboard", page_icon="🏥")
+        st.set_page_config(layout="wide", page_title="Euro Health Dashboard", page_icon="euhealthdashboard.ico")
 
         st.title("🏥 European Public Health Dashboard")
         st.markdown("### Advanced Mortality Trend Analysis, Spatial Mapping & Network Dynamics")
