@@ -23,45 +23,44 @@ import networkx as nx
 import matplotlib.pyplot as plt
 import zipfile
 from scipy import stats
-from scipy.spatial.distance import pdist, squareform
 from statsmodels.stats.multitest import multipletests
 
 # --------------------------------------------------------------------------
 # CONSTANTS
 # --------------------------------------------------------------------------
 EU_CODES = [
-    "AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","EL","HU","IE",
-    "IT","LV","LT","LU","MT","NL","PL","PT","RO","SK","SI","ES","SE"
+    "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "EL", "HU", "IE",
+    "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"
 ]
 
 NEIGHBORS = {
-    "AT":["DE","CZ","SK","HU","SI","IT"],
-    "BE":["FR","DE","NL","LU"],
-    "BG":["RO","EL"],
-    "HR":["SI","HU"],
-    "CY":[],
-    "CZ":["DE","PL","SK","AT"],
-    "DK":["DE"],
-    "EE":["LV"],
-    "FI":["SE"],
-    "FR":["BE","LU","DE","IT","ES"],
-    "DE":["DK","PL","CZ","AT","FR","LU","BE","NL"],
-    "EL":["BG"],
-    "HU":["AT","SK","RO","HR"],
-    "IE":[],
-    "IT":["FR","AT","SI"],
-    "LV":["EE","LT"],
-    "LT":["LV","PL"],
-    "LU":["BE","DE","FR"],
-    "MT":[],
-    "NL":["BE","DE"],
-    "PL":["DE","CZ","SK","LT"],
-    "PT":["ES"],
-    "RO":["BG","HU"],
-    "SK":["CZ","PL","HU","AT"],
-    "SI":["IT","AT","HU","HR"],
-    "ES":["FR","PT"],
-    "SE":["FI"]
+    "AT": ["DE", "CZ", "SK", "HU", "SI", "IT"],
+    "BE": ["FR", "DE", "NL", "LU"],
+    "BG": ["RO", "EL"],
+    "HR": ["SI", "HU"],
+    "CY": [],
+    "CZ": ["DE", "PL", "SK", "AT"],
+    "DK": ["DE"],
+    "EE": ["LV"],
+    "FI": ["SE"],
+    "FR": ["BE", "LU", "DE", "IT", "ES"],
+    "DE": ["DK", "PL", "CZ", "AT", "FR", "LU", "BE", "NL"],
+    "EL": ["BG"],
+    "HU": ["AT", "SK", "RO", "HR"],
+    "IE": [],
+    "IT": ["FR", "AT", "SI"],
+    "LV": ["EE", "LT"],
+    "LT": ["LV", "PL"],
+    "LU": ["BE", "DE", "FR"],
+    "MT": [],
+    "NL": ["BE", "DE"],
+    "PL": ["DE", "CZ", "SK", "LT"],
+    "PT": ["ES"],
+    "RO": ["BG", "HU"],
+    "SK": ["CZ", "PL", "HU", "AT"],
+    "SI": ["IT", "AT", "HU", "HR"],
+    "ES": ["FR", "PT"],
+    "SE": ["FI"]
 }
 
 SEX_NAME_MAP = {"T": "Total", "M": "Male", "F": "Female"}
@@ -191,9 +190,11 @@ FACTOR_IDS = {
     "Unmet needs": "hlth_ehis_un1e"
 }
 
+
 def alpha3_from_a2(a2: str):
     c = pycountry.countries.get(alpha_2=a2)
     return c.alpha_3 if c else None
+
 
 # --------------------------------------------------------------------------
 # DATA LOADING
@@ -205,6 +206,7 @@ def load_eurostat_series(dataset_id: str) -> pd.DataFrame:
         f"{base}/{dataset_id}?format=TSV&compressed=true",
         f"{base}/{dataset_id}?format=TSV"
     ]
+
     raw = None
     for url in endpoints:
         try:
@@ -236,8 +238,7 @@ def load_eurostat_series(dataset_id: str) -> pd.DataFrame:
     df = pd.concat([keys, raw.drop(columns=["series_keys"])], axis=1)
 
     years = [c for c in df.columns if c not in dims]
-    long = df.melt(id_vars=dims, value_vars=years,
-                   var_name="Year", value_name="raw_rate")
+    long = df.melt(id_vars=dims, value_vars=years, var_name="Year", value_name="raw_rate")
     long["Year"] = long["Year"].astype(int)
     long["Rate"] = pd.to_numeric(long["raw_rate"].replace(":", np.nan), errors="coerce")
 
@@ -262,6 +263,7 @@ def load_eurostat_series(dataset_id: str) -> pd.DataFrame:
     cols = ["Region", "Year", "Category", "Sex", "Rate"]
     return out[[c for c in cols if c in out.columns]]
 
+
 @st.cache_data
 def load_data() -> pd.DataFrame:
     def ld(ds):
@@ -269,16 +271,18 @@ def load_data() -> pd.DataFrame:
         return x.dropna(subset=["Rate"])
 
     hist = ld("hlth_cd_asdr")
-    mod  = ld("hlth_cd_asdr2")
-    mod  = mod[mod["Country"].str.fullmatch(r"[A-Z]{2}")]
-    df   = pd.concat([hist, mod], ignore_index=True).sort_values(["Country", "Cause", "Sex", "Year"])
+    mod = ld("hlth_cd_asdr2")
+    mod = mod[mod["Country"].str.fullmatch(r"[A-Z]{2}")]
+    df = pd.concat([hist, mod], ignore_index=True).sort_values(["Country", "Cause", "Sex", "Year"])
 
-    df_eu  = df[df["Country"].isin(EU_CODES)].groupby(["Year", "Cause", "Sex"], as_index=False)["Rate"].mean()
+    df_eu = df[df["Country"].isin(EU_CODES)].groupby(["Year", "Cause", "Sex"], as_index=False)["Rate"].mean()
     df_eu["Country"] = "EU"
+
     df_eur = df.groupby(["Year", "Cause", "Sex"], as_index=False)["Rate"].mean()
     df_eur["Country"] = "Europe"
 
     return pd.concat([df, df_eu, df_eur], ignore_index=True)
+
 
 @st.cache_data
 def load_all_factors() -> pd.DataFrame:
@@ -301,6 +305,7 @@ def load_all_factors() -> pd.DataFrame:
         return pd.DataFrame(columns=["Country", "Year", "Sex", "Rate", "FactorName"])
     return pd.concat(frames, ignore_index=True)
 
+
 # --------------------------------------------------------------------------
 # CHANGEPOINT DETECTION
 # --------------------------------------------------------------------------
@@ -313,6 +318,7 @@ def detect_change_points(ts, pen: float = 3) -> list:
         return algo.predict(pen=pen)
     except BadSegmentationParameters:
         return []
+
 
 def compute_changepoints_and_apc(df_sub: pd.DataFrame) -> pd.DataFrame:
     recs = []
@@ -346,16 +352,17 @@ def compute_changepoints_and_apc(df_sub: pd.DataFrame) -> pd.DataFrame:
 
     return pd.DataFrame(recs)
 
+
 # --------------------------------------------------------------------------
 # VISUALIZATION FUNCTIONS
 # --------------------------------------------------------------------------
 def plot_changepoints_comparative(df_sub: pd.DataFrame, title: str):
     df_sub = df_sub.copy()
     df_sub["SexFull"] = df_sub["Sex"].map(SEX_NAME_MAP)
-    fig = px.line(df_sub, x="Year", y="Rate", color="SexFull",
-                  title=title, markers=True)
-    fig.update_layout(hovermode='x unified')
+    fig = px.line(df_sub, x="Year", y="Rate", color="SexFull", title=title, markers=True)
+    fig.update_layout(hovermode="x unified")
     st.plotly_chart(fig, use_container_width=True)
+
 
 def plot_segmented_fit_series(df_sub: pd.DataFrame, title: str):
     sub = df_sub.sort_values("Year")
@@ -364,8 +371,10 @@ def plot_segmented_fit_series(df_sub: pd.DataFrame, title: str):
     segs = np.split(np.arange(len(yrs)), bkps) if bkps else [np.arange(len(yrs))]
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=yrs, y=rates, mode="markers+lines",
-                             name="Observed", line=dict(color='lightgray')))
+    fig.add_trace(go.Scatter(
+        x=yrs, y=rates, mode="markers+lines",
+        name="Observed", line=dict(color="lightgray")
+    ))
 
     palette = px.colors.qualitative.Dark24
     for i, seg in enumerate(segs):
@@ -378,19 +387,26 @@ def plot_segmented_fit_series(df_sub: pd.DataFrame, title: str):
                 name=f"Segment {i+1} ({idx[0]}-{idx[-1]})"
             ))
 
-    fig.update_layout(title=title, xaxis_title="Year", yaxis_title="Rate",
-                      hovermode='x unified')
+    fig.update_layout(
+        title=title,
+        xaxis_title="Year",
+        yaxis_title="Rate",
+        hovermode="x unified"
+    )
     st.plotly_chart(fig, use_container_width=True)
+
 
 def plot_heatmap_temporal(df_sub: pd.DataFrame, title: str):
     pivot = df_sub.pivot_table(index="Country", columns="Year", values="Rate")
-
-    fig = px.imshow(pivot,
-                    labels=dict(x="Year", y="Country", color="Rate"),
-                    title=title,
-                    aspect="auto",
-                    color_continuous_scale="RdYlGn_r")
+    fig = px.imshow(
+        pivot,
+        labels=dict(x="Year", y="Country", color="Rate"),
+        title=title,
+        aspect="auto",
+        color_continuous_scale="RdYlGn_r"
+    )
     st.plotly_chart(fig, use_container_width=True)
+
 
 # --------------------------------------------------------------------------
 # FORECASTING
@@ -404,19 +420,22 @@ def get_prophet_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     fc = m.predict(fut)
     return pd.DataFrame({"Year": fc["ds"].dt.year, "Prophet": fc["yhat"]})
 
+
 def get_arima_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     ser = df_sub.set_index("Year")["Rate"]
-    res = ARIMA(ser, order=(1,1,1)).fit()
+    res = ARIMA(ser, order=(1, 1, 1)).fit()
     preds = res.forecast(periods)
-    yrs = np.arange(ser.index.max()+1, ser.index.max()+1+periods)
+    yrs = np.arange(ser.index.max() + 1, ser.index.max() + 1 + periods)
     return pd.DataFrame({"Year": yrs, "ARIMA": preds.values})
+
 
 def get_ets_forecast(df_sub: pd.DataFrame, periods: int) -> pd.DataFrame:
     ser = df_sub.set_index("Year")["Rate"]
     m = ExponentialSmoothing(ser, trend="add", seasonal=None).fit(optimized=True)
     preds = m.forecast(periods)
-    yrs = np.arange(ser.index.max()+1, ser.index.max()+1+periods)
+    yrs = np.arange(ser.index.max() + 1, ser.index.max() + 1 + periods)
     return pd.DataFrame({"Year": yrs, "ETS": preds.values})
+
 
 def forecast_mortality(df_sub: pd.DataFrame, periods: int, method: str) -> pd.DataFrame:
     prop = get_prophet_forecast(df_sub, periods)
@@ -436,28 +455,33 @@ def forecast_mortality(df_sub: pd.DataFrame, periods: int, method: str) -> pd.Da
     hist = df_sub[["Year", "Rate"]].rename(columns={"Rate": "History"})
     return hist.merge(fc[["Year", "Forecast"]], on="Year", how="outer")
 
+
 # --------------------------------------------------------------------------
 # GRANGER / NETWORK HELPERS
 # --------------------------------------------------------------------------
 def has_physical_border(src_code: str, dst_code: str) -> bool:
-    """Return True only if dst_code is listed as a physical land neighbor of src_code."""
     if src_code is None or dst_code is None:
         return False
     return dst_code in NEIGHBORS.get(src_code, [])
 
+
 def make_lag_matrix(series: np.ndarray, maxlag: int) -> np.ndarray:
-    return np.column_stack([series[maxlag-lag:-lag] for lag in range(1, maxlag + 1)])
+    return np.column_stack([series[maxlag - lag:-lag] for lag in range(1, maxlag + 1)])
+
 
 def compute_granger_causality_bic(pair_df: pd.DataFrame, maxlag: int) -> dict:
     """
     Standard Granger comparison:
-    null  = target explained by its own lags
-    alt   = target explained by its own lags + source lags
-    Returns BIC-based BF10 approximation and F-test p-value.
+      null = target's own lags
+      alt  = target's own lags + source lags
+
+    Returns:
+      approx_bf10 : BIC-based approximation to BF10
+      p_value     : F-test p-value
     """
     df_pair = pair_df.dropna().copy()
     if df_pair.shape[0] < (2 * maxlag + 5):
-        return {"BF10": np.nan, "p_value": np.nan}
+        return {"approx_bf10": np.nan, "p_value": np.nan}
 
     target, cause = df_pair.columns
     y_all = df_pair[target].values.astype(float)
@@ -467,20 +491,20 @@ def compute_granger_causality_bic(pair_df: pd.DataFrame, maxlag: int) -> dict:
     target_lags = make_lag_matrix(y_all, maxlag)
     cause_lags = make_lag_matrix(x_all, maxlag)
 
-    X_null = sm.add_constant(target_lags, has_constant='add')
-    X_alt = sm.add_constant(np.column_stack([target_lags, cause_lags]), has_constant='add')
+    X_null = sm.add_constant(target_lags, has_constant="add")
+    X_alt = sm.add_constant(np.column_stack([target_lags, cause_lags]), has_constant="add")
 
     try:
         m0 = sm.OLS(y, X_null).fit()
         m1 = sm.OLS(y, X_alt).fit()
 
-        bf10 = float(np.exp((m0.bic - m1.bic) / 2.0))
+        approx_bf10 = float(np.exp((m0.bic - m1.bic) / 2.0))
 
         df_num = m0.df_resid - m1.df_resid
         df_den = m1.df_resid
 
         if df_num <= 0 or df_den <= 0:
-            return {"BF10": bf10, "p_value": np.nan}
+            return {"approx_bf10": approx_bf10, "p_value": np.nan}
 
         f_stat = ((m0.ssr - m1.ssr) / df_num) / (m1.ssr / df_den)
         if np.isnan(f_stat) or np.isinf(f_stat):
@@ -488,15 +512,12 @@ def compute_granger_causality_bic(pair_df: pd.DataFrame, maxlag: int) -> dict:
         else:
             p_value = 1 - stats.f.cdf(f_stat, df_num, df_den)
 
-        return {"BF10": bf10, "p_value": p_value}
-
+        return {"approx_bf10": approx_bf10, "p_value": p_value}
     except Exception:
-        return {"BF10": np.nan, "p_value": np.nan}
+        return {"approx_bf10": np.nan, "p_value": np.nan}
+
 
 def apply_fdr_correction(pval_df: pd.DataFrame, allowed_mask: pd.DataFrame) -> pd.DataFrame:
-    """
-    Apply FDR correction only across the tests that were actually evaluated and allowed.
-    """
     corrected = pval_df.copy()
     tested_pairs = []
     raw_pvals = []
@@ -518,6 +539,7 @@ def apply_fdr_correction(pval_df: pd.DataFrame, allowed_mask: pd.DataFrame) -> p
 
     return corrected
 
+
 def build_allowed_mask_from_codes(codes: list) -> pd.DataFrame:
     mask = pd.DataFrame(False, index=codes, columns=codes)
     for src in codes:
@@ -526,6 +548,7 @@ def build_allowed_mask_from_codes(codes: list) -> pd.DataFrame:
                 continue
             mask.loc[src, dst] = has_physical_border(src, dst)
     return mask
+
 
 def build_allowed_mask_from_names(names: list) -> pd.DataFrame:
     mask = pd.DataFrame(False, index=names, columns=names)
@@ -538,73 +561,86 @@ def build_allowed_mask_from_names(names: list) -> pd.DataFrame:
             mask.loc[src, dst] = has_physical_border(src_code, dst_code)
     return mask
 
+
 def draw_directed_network(nodes, edges, title, edge_labels=None):
-    """Draw directed network with adaptive curvature and manual label placement."""
+    """
+    Draw directed network with clearer handling of reciprocal edges.
+    Each directional label is placed closer to its source node and offset
+    along the curvature, so A->B and B->A do not sit on top of each other.
+    """
     try:
         G = nx.DiGraph()
         G.add_nodes_from(nodes)
         G.add_edges_from(edges)
 
         n = len(nodes)
-        angles = np.linspace(0, 2*np.pi, n, endpoint=False)
-        fig, ax = plt.subplots(figsize=(10, 10))
+        angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
+
+        fig, ax = plt.subplots(figsize=(11, 11))
         pos = {nodes[i]: (np.cos(angles[i]), np.sin(angles[i])) for i in range(n)}
 
         nx.draw_networkx_nodes(
             G, pos,
-            node_size=950,
-            node_color='skyblue',
-            edgecolors='black',
+            node_size=1000,
+            node_color="skyblue",
+            edgecolors="black",
             linewidths=1.2,
             ax=ax
         )
 
-        # Draw edges individually to allow different curvature
         for (u, v) in edges:
-            if (v, u) in edges and u != v:
-                rad = 0.22 if str(u) < str(v) else -0.22
-            else:
-                rad = 0.10
+            reciprocal = (v, u) in edges and u != v
+            rad = 0.24 if (reciprocal and str(u) < str(v)) else (-0.24 if reciprocal else 0.10)
 
             nx.draw_networkx_edges(
                 G, pos,
                 edgelist=[(u, v)],
                 arrows=True,
-                arrowsize=22,
+                arrowsize=24,
                 width=2,
-                edge_color='gray',
+                edge_color="gray",
                 ax=ax,
                 connectionstyle=f"arc3,rad={rad}",
-                min_source_margin=18,
-                min_target_margin=18
+                min_source_margin=22,
+                min_target_margin=22
             )
 
             if edge_labels and (u, v) in edge_labels:
                 x1, y1 = pos[u]
                 x2, y2 = pos[v]
 
-                mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
                 dx, dy = x2 - x1, y2 - y1
                 length = np.hypot(dx, dy)
+                if length == 0:
+                    continue
 
-                if length > 0:
-                    ox, oy = -dy / length, dx / length
-                else:
-                    ox, oy = 0.0, 0.0
+                ux, uy = dx / length, dy / length
+                px, py = -uy, ux
 
-                offset = 0.12 if rad > 0 else -0.12
-                lx, ly = mx + offset * ox, my + offset * oy
+                bx = x1 + 0.38 * dx
+                by = y1 + 0.38 * dy
+
+                curve_offset = 0.12 if rad > 0 else -0.12
+                lx = bx + curve_offset * px
+                ly = by + curve_offset * py
+
+                label_text = f"{u}→{v}\n{edge_labels[(u, v)]}"
 
                 ax.text(
                     lx, ly,
-                    f"{edge_labels[(u, v)]}",
+                    label_text,
                     fontsize=8,
-                    ha='center', va='center',
-                    bbox=dict(facecolor='white', edgecolor='none', alpha=0.85, pad=0.25),
-                    zorder=5
+                    ha="center", va="center",
+                    bbox=dict(
+                        facecolor="white",
+                        edgecolor="gray",
+                        boxstyle="round,pad=0.25",
+                        alpha=0.92
+                    ),
+                    zorder=6
                 )
 
-        radius = 1.32
+        radius = 1.34
         for i, node in enumerate(nodes):
             angle = angles[i]
             x = np.cos(angle) * radius
@@ -617,21 +653,26 @@ def draw_directed_network(nodes, edges, title, edge_labels=None):
                 x, y, node,
                 ha=ha, va=va,
                 fontsize=10,
-                bbox=dict(facecolor='white', edgecolor='black',
-                          boxstyle='round,pad=0.35', alpha=0.92),
-                zorder=6
+                bbox=dict(
+                    facecolor="white",
+                    edgecolor="black",
+                    boxstyle="round,pad=0.35",
+                    alpha=0.95
+                ),
+                zorder=7
             )
 
-        ax.set_title(title, pad=20, fontsize=14, fontweight='bold')
+        ax.set_title(title, pad=20, fontsize=14, fontweight="bold")
         ax.set_axis_off()
-        ax.set_xlim(-1.9, 1.9)
-        ax.set_ylim(-1.9, 1.9)
+        ax.set_xlim(-1.95, 1.95)
+        ax.set_ylim(-1.95, 1.95)
+
         st.pyplot(fig)
         plt.close()
-
     except Exception as e:
         st.error(f"Error drawing network: {str(e)}")
-        plt.close('all')
+        plt.close("all")
+
 
 # --------------------------------------------------------------------------
 # OTHER ANALYSES
@@ -661,6 +702,7 @@ def compute_excess_mortality(df, baseline_years, comparison_year, country_code, 
         "excess_pct": excess
     }
 
+
 def compute_spatial_autocorrelation(df, year, cause_code):
     rates_df = df[
         (df["Country"].isin(EU_CODES)) &
@@ -682,8 +724,7 @@ def compute_spatial_autocorrelation(df, year, cause_code):
                 W[i, j] = 1
 
     row_sums = W.sum(axis=1)
-    W = np.divide(W, row_sums[:, np.newaxis],
-                  where=row_sums[:, np.newaxis] != 0)
+    W = np.divide(W, row_sums[:, np.newaxis], where=row_sums[:, np.newaxis] != 0)
 
     rates = rates_df["Rate"].values
     mean_rate = rates.mean()
@@ -697,6 +738,7 @@ def compute_spatial_autocorrelation(df, year, cause_code):
     moran_i = (n / W.sum()) * (numerator / denominator)
 
     return {"morans_i": moran_i, "n_countries": n}
+
 
 def compare_with_benchmark(df, country_code, cause_code, year_range):
     country_data = df[
@@ -716,8 +758,8 @@ def compare_with_benchmark(df, country_code, cause_code, year_range):
     comparison = country_data.merge(eu_data, on="Year")
     comparison["Difference"] = comparison["Country"] - comparison["EU Average"]
     comparison["Pct_Difference"] = (comparison["Difference"] / comparison["EU Average"]) * 100
-
     return comparison
+
 
 # --------------------------------------------------------------------------
 # MAIN APPLICATION
@@ -745,38 +787,23 @@ def main():
 
         countries = sorted(df["CountryFull"].dropna().unique())
         default_country = "European Union" if "European Union" in countries else countries[0]
-        country_full = st.sidebar.selectbox(
-            "Country",
-            countries,
-            index=countries.index(default_country)
-        )
+        country_full = st.sidebar.selectbox("Country", countries, index=countries.index(default_country))
         country_code = REV_COUNTRY_NAME_MAP.get(country_full, country_full)
 
         causes = sorted(df[df["Country"] == country_code]["CauseFull"].dropna().unique())
         cause_full = st.sidebar.selectbox("Cause of Death", causes)
         cause_code = REV_CAUSE_NAME_MAP.get(cause_full, cause_full)
 
-        sex_sel = st.sidebar.multiselect(
-            "Sex",
-            ["Total", "Male", "Female"],
-            default=["Total"]
-        )
+        sex_sel = st.sidebar.multiselect("Sex", ["Total", "Male", "Female"], default=["Total"])
         sex_codes = [REV_SEX_NAME[s] for s in sex_sel]
 
         yrs = sorted(df["Year"].unique())
-        year_range = st.sidebar.slider(
-            "Analysis Period",
-            yrs[0], yrs[-1],
-            (yrs[0], yrs[-1])
-        )
+        year_range = st.sidebar.slider("Analysis Period", yrs[0], yrs[-1], (yrs[0], yrs[-1]))
 
         st.sidebar.markdown("---")
         st.sidebar.header("🔮 Forecast Settings")
         forecast_yrs = st.sidebar.slider("Forecast Horizon (years)", 1, 30, 10)
-        method = st.sidebar.selectbox(
-            "Forecast Method",
-            ["Ensemble", "Prophet", "ARIMA", "ETS"]
-        )
+        method = st.sidebar.selectbox("Forecast Method", ["Ensemble", "Prophet", "ARIMA", "ETS"])
 
         changepoint_df = pd.DataFrame()
         forecasts = {}
@@ -798,17 +825,29 @@ def main():
             st.warning("⚠️ No data available for selected filters.")
         else:
             st.subheader("🔍 Changepoint Detection & Trend Segmentation")
-            st.info("💡 This uses changepoint detection (PELT), not classical joinpoint regression.")
+            st.info(
+                "💡 This uses changepoint detection (PELT), not classical joinpoint regression. "
+                "The segment table is shown next to the segmented fits below."
+            )
 
             changepoint_df = compute_changepoints_and_apc(df_filtered)
 
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                plot_changepoints_comparative(
-                    df_filtered,
-                    f"{cause_full} - Temporal Trends by Sex"
-                )
-            with col2:
+            plot_changepoints_comparative(
+                df_filtered,
+                f"{cause_full} - Temporal Trends by Sex"
+            )
+
+            st.subheader("📐 Segmented Linear Fits")
+            fit_col, seg_col = st.columns([2.2, 1])
+
+            with fit_col:
+                for sc, sf in zip(sex_codes, sex_sel):
+                    plot_segmented_fit_series(
+                        df_filtered[df_filtered["Sex"] == sc],
+                        f"{cause_full} ({sf}) - Segmented Trend Analysis"
+                    )
+
+            with seg_col:
                 st.markdown("#### Detected Segments")
                 st.dataframe(
                     changepoint_df.style.format({
@@ -818,38 +857,21 @@ def main():
                     use_container_width=True
                 )
 
-            st.subheader("📐 Segmented Linear Fits")
-            for sc, sf in zip(sex_codes, sex_sel):
-                plot_segmented_fit_series(
-                    df_filtered[df_filtered["Sex"] == sc],
-                    f"{cause_full} ({sf}) - Segmented Trend Analysis"
-                )
-
             st.subheader(f"🔮 {forecast_yrs}-Year Forecast ({method} Method)")
             forecast_cols = st.columns(len(sex_sel))
 
             for idx, (sc, sf) in enumerate(zip(sex_codes, sex_sel)):
-                fc = forecast_mortality(
-                    df_filtered[df_filtered["Sex"] == sc],
-                    forecast_yrs, method
-                )
+                fc = forecast_mortality(df_filtered[df_filtered["Sex"] == sc], forecast_yrs, method)
                 forecasts[sf] = fc
 
                 with forecast_cols[idx]:
-                    fig = px.line(
-                        fc, x="Year", y=["History", "Forecast"],
-                        title=f"{sf} - {method} Forecast"
-                    )
+                    fig = px.line(fc, x="Year", y=["History", "Forecast"], title=f"{sf} - {method} Forecast")
                     fig.update_traces(line=dict(width=3))
-                    fig.add_vline(
-                        x=year_range[1], line_dash="dash",
-                        line_color="gray", opacity=0.5
-                    )
+                    fig.add_vline(x=year_range[1], line_dash="dash", line_color="gray", opacity=0.5)
                     st.plotly_chart(fig, use_container_width=True)
 
             if country_code not in ["EU", "Europe"]:
                 st.subheader("📊 Benchmark Comparison with EU Average")
-
                 try:
                     benchmark = compare_with_benchmark(df, country_code, cause_code, year_range)
 
@@ -863,7 +885,7 @@ def main():
                         fig.add_trace(
                             go.Scatter(
                                 x=benchmark["Year"], y=benchmark["Country"],
-                                mode='lines+markers', name=country_full,
+                                mode="lines+markers", name=country_full,
                                 line=dict(width=3)
                             ),
                             row=1, col=1
@@ -871,8 +893,8 @@ def main():
                         fig.add_trace(
                             go.Scatter(
                                 x=benchmark["Year"], y=benchmark["EU Average"],
-                                mode='lines+markers', name="EU Average",
-                                line=dict(width=3, dash='dash')
+                                mode="lines+markers", name="EU Average",
+                                line=dict(width=3, dash="dash")
                             ),
                             row=1, col=1
                         )
@@ -880,15 +902,12 @@ def main():
                         fig.add_trace(
                             go.Bar(
                                 x=benchmark["Year"], y=benchmark["Pct_Difference"],
-                                marker_color=np.where(benchmark["Pct_Difference"] > 0, 'red', 'green'),
+                                marker_color=np.where(benchmark["Pct_Difference"] > 0, "red", "green"),
                                 showlegend=False
                             ),
                             row=2, col=1
                         )
-                        fig.add_hline(
-                            y=0, line_dash="dash", line_color="black",
-                            row=2, col=1
-                        )
+                        fig.add_hline(y=0, line_dash="dash", line_color="black", row=2, col=1)
 
                         fig.update_xaxes(title_text="Year", row=2, col=1)
                         fig.update_yaxes(title_text="Rate", row=1, col=1)
@@ -903,7 +922,7 @@ def main():
                         with col2:
                             st.metric("Average Rate (EU)", f"{benchmark['EU Average'].mean():.1f}")
                         with col3:
-                            avg_diff = benchmark['Pct_Difference'].mean()
+                            avg_diff = benchmark["Pct_Difference"].mean()
                             st.metric(
                                 "Average Difference",
                                 f"{avg_diff:+.1f}%",
@@ -994,11 +1013,11 @@ def main():
                             reg_coefs = mdl.params.drop("const")
 
                             fig = go.Figure()
-                            colors = ['green' if x < 0 else 'red' for x in reg_coefs.values]
+                            colors = ["green" if x < 0 else "red" for x in reg_coefs.values]
                             fig.add_trace(go.Bar(
                                 x=reg_coefs.values,
                                 y=reg_coefs.index,
-                                orientation='h',
+                                orientation="h",
                                 marker_color=colors
                             ))
                             fig.update_layout(
@@ -1026,9 +1045,13 @@ def main():
             (df["Year"].between(*year_range))
         ]
 
-        pivot = df_cluster.pivot(index="Country", columns="Year", values="Rate")\
-                          .interpolate(axis=1, limit_direction="both")\
-                          .ffill(axis=1).bfill(axis=1).dropna(axis=0, how="all")
+        pivot = (
+            df_cluster.pivot(index="Country", columns="Year", values="Rate")
+            .interpolate(axis=1, limit_direction="both")
+            .ffill(axis=1)
+            .bfill(axis=1)
+            .dropna(axis=0, how="all")
+        )
 
         clust_df = pd.DataFrame()
 
@@ -1047,11 +1070,7 @@ def main():
 
             with col1:
                 st.subheader("Optimal Cluster Selection")
-                sil_df = pd.DataFrame.from_dict(
-                    sil_scores,
-                    orient='index',
-                    columns=['Silhouette Score']
-                )
+                sil_df = pd.DataFrame.from_dict(sil_scores, orient="index", columns=["Silhouette Score"])
                 st.dataframe(sil_df.style.format("{:.3f}"), use_container_width=True)
 
                 best_k = max(sil_scores, key=sil_scores.get)
@@ -1067,15 +1086,11 @@ def main():
                 )
                 fig.update_xaxes(title="Number of Clusters (k)")
                 fig.update_yaxes(title="Silhouette Score")
-                fig.add_vline(x=best_k, line_dash="dash", line_color="red",
-                             annotation_text=f"Optimal k={best_k}")
+                fig.add_vline(x=best_k, line_dash="dash", line_color="red", annotation_text=f"Optimal k={best_k}")
                 st.plotly_chart(fig, use_container_width=True)
 
             km = KMeans(n_clusters=best_k, random_state=42, n_init=10).fit(X)
-            clust_df = pd.DataFrame({
-                "Country": pivot.index,
-                "Cluster": km.labels_.astype(str)
-            })
+            clust_df = pd.DataFrame({"Country": pivot.index, "Cluster": km.labels_.astype(str)})
             clust_df["CountryFull"] = clust_df["Country"].map(COUNTRY_NAME_MAP)
             clust_df["iso_alpha"] = clust_df["Country"].apply(alpha3_from_a2)
 
@@ -1107,8 +1122,12 @@ def main():
 
                     if not cluster_data.empty:
                         avg_trajectory = cluster_data.groupby("Year")["Rate"].mean().reset_index()
-                        fig = px.line(avg_trajectory, x="Year", y="Rate",
-                                      title=f"Average Mortality Trajectory - Cluster {cluster}")
+                        fig = px.line(
+                            avg_trajectory,
+                            x="Year",
+                            y="Rate",
+                            title=f"Average Mortality Trajectory - Cluster {cluster}"
+                        )
                         st.plotly_chart(fig, use_container_width=True)
                     else:
                         st.warning("No data available for this cluster")
@@ -1119,9 +1138,10 @@ def main():
         st.markdown("---")
         st.header("🔗 Granger Causality Network Analysis")
         st.info(
-            "This version uses a more standard Granger comparison: "
+            "This version uses a standard Granger comparison: "
             "null = target's own lags, alternative = target's own lags + source lags. "
-            "Displayed p-values are FDR-corrected within the tested network family."
+            "Displayed q-values are FDR-corrected across tested border pairs. "
+            "Evidence values are BIC-based approximations to BF10, not full Bayesian Bayes factors."
         )
 
         analysis_type = st.radio(
@@ -1179,8 +1199,8 @@ def main():
                 )
 
                 nbr_lag = st.slider("Maximum lag (years)", 1, 5, 2, key="nbr_lag")
-                nbr_bf = st.number_input("BF₁₀ threshold", 1.0, 100.0, 3.0, 0.5, key="nbr_bf")
-                require_sig = st.checkbox("Require FDR-corrected p < 0.05 for edges", value=True)
+                nbr_bf = st.number_input("Approx. BF₁₀ threshold", 1.0, 100.0, 3.0, 0.5, key="nbr_bf")
+                require_sig = st.checkbox("Require FDR-corrected q < 0.05 for edges", value=True)
 
                 countries_to_analyze = [focal_code] + nbrs
                 df_n_data = df[
@@ -1211,7 +1231,7 @@ def main():
                                 pair = pivot_n[[dst, src]].dropna()
                                 if len(pair) >= (2 * nbr_lag + 5):
                                     result = compute_granger_causality_bic(pair, nbr_lag)
-                                    bf_n.loc[src, dst] = result["BF10"]
+                                    bf_n.loc[src, dst] = result["approx_bf10"]
                                     pval_n.loc[src, dst] = result["p_value"]
 
                     pval_n_corr = apply_fdr_correction(pval_n, allowed_n)
@@ -1219,23 +1239,23 @@ def main():
                     col1, col2, col3 = st.columns(3)
 
                     with col1:
-                        st.markdown("##### BF₁₀ Matrix")
+                        st.markdown("##### Approx. BF₁₀ Matrix")
                         st.dataframe(
-                            bf_n.style.background_gradient(cmap='YlOrRd', axis=None).format("{:.2f}"),
+                            bf_n.style.background_gradient(cmap="YlOrRd", axis=None).format("{:.2f}"),
                             use_container_width=True
                         )
 
                     with col2:
                         st.markdown("##### Raw P-values")
                         st.dataframe(
-                            pval_n.style.background_gradient(cmap='RdYlGn_r', vmin=0, vmax=0.1).format("{:.4f}"),
+                            pval_n.style.background_gradient(cmap="RdYlGn_r", vmin=0, vmax=0.1).format("{:.4f}"),
                             use_container_width=True
                         )
 
                     with col3:
-                        st.markdown("##### FDR-corrected P-values")
+                        st.markdown("##### FDR-corrected Q-values")
                         st.dataframe(
-                            pval_n_corr.style.background_gradient(cmap='RdYlGn_r', vmin=0, vmax=0.1).format("{:.4f}"),
+                            pval_n_corr.style.background_gradient(cmap="RdYlGn_r", vmin=0, vmax=0.1).format("{:.4f}"),
                             use_container_width=True
                         )
 
@@ -1250,34 +1270,41 @@ def main():
                                 continue
 
                             bf = bf_n.loc[src, dst]
-                            pcorr = pval_n_corr.loc[src, dst]
+                            qcorr = pval_n_corr.loc[src, dst]
 
                             passes = pd.notna(bf) and (bf >= nbr_bf)
                             if require_sig:
-                                passes = passes and pd.notna(pcorr) and (pcorr < 0.05)
+                                passes = passes and pd.notna(qcorr) and (qcorr < 0.05)
 
                             if passes:
                                 src_full = COUNTRY_NAME_MAP.get(src, src)
                                 dst_full = COUNTRY_NAME_MAP.get(dst, dst)
                                 edges_n.append((src_full, dst_full))
 
-                                if pd.notna(pcorr):
-                                    edge_labels[(src_full, dst_full)] = f"BF={bf:.1f}, q={pcorr:.3f}"
+                                if pd.notna(qcorr):
+                                    edge_labels[(src_full, dst_full)] = f"{bf:.1f} | q={qcorr:.3f}"
                                 else:
-                                    edge_labels[(src_full, dst_full)] = f"BF={bf:.1f}"
+                                    edge_labels[(src_full, dst_full)] = f"{bf:.1f}"
 
                     nodes_n = [COUNTRY_NAME_MAP.get(c, c) for c in common_n]
 
                     st.subheader("Network Visualization")
-                    st.caption("Only countries in the focal set are analyzed, and only physical-border edges are allowed.")
+                    st.caption(
+                        "Only countries in the focal set are analyzed, and only physical-border edges are allowed. "
+                        "Reciprocal arrows are labelled separately near their source directions."
+                    )
 
                     if not edges_n:
                         st.info("No qualifying Granger relationships detected under the current thresholds.")
                     else:
                         st.success(f"Found {len(edges_n)} qualifying relationships")
+                        title_suffix = f"Approx. BF₁₀ ≥ {nbr_bf}"
+                        if require_sig:
+                            title_suffix += ", q < 0.05"
                         draw_directed_network(
-                            nodes_n, edges_n,
-                            f"Neighbor Granger Network (BF₁₀ ≥ {nbr_bf}" + (", q < 0.05)" if require_sig else ")"),
+                            nodes_n,
+                            edges_n,
+                            f"Neighbor Granger Network ({title_suffix})",
                             edge_labels
                         )
 
@@ -1295,8 +1322,8 @@ def main():
                 st.warning("Please select at least 2 countries")
             else:
                 gl_maxlag = st.slider("Maximum lag (years)", 1, 5, 2, key="gl_maxlag")
-                bf_thresh = st.number_input("BF₁₀ threshold", 1.0, 100.0, 3.0, 0.5, key="bf_thr")
-                require_sig_global = st.checkbox("Require FDR-corrected p < 0.05 for global edges", value=True)
+                bf_thresh = st.number_input("Approx. BF₁₀ threshold", 1.0, 100.0, 3.0, 0.5, key="bf_thr")
+                require_sig_global = st.checkbox("Require FDR-corrected q < 0.05 for global edges", value=True)
 
                 df_g = df[
                     (df["Cause"] == cause_code) &
@@ -1326,26 +1353,26 @@ def main():
                                 pair = pivot_gc[[dst, src]].dropna()
                                 if len(pair) >= (2 * gl_maxlag + 5):
                                     result = compute_granger_causality_bic(pair, gl_maxlag)
-                                    bf_mat.loc[src, dst] = result["BF10"]
+                                    bf_mat.loc[src, dst] = result["approx_bf10"]
                                     pval_mat.loc[src, dst] = result["p_value"]
 
                     pval_mat_corr = apply_fdr_correction(pval_mat, allowed_global)
 
-                    st.subheader("Granger Causality Heatmap (BF₁₀)")
+                    st.subheader("Granger Causality Heatmap (Approx. BF₁₀)")
                     fig = px.imshow(
                         bf_mat.astype(float),
-                        labels=dict(x="To Country", y="From Country", color="BF₁₀"),
-                        title="BF₁₀ values (rows predict columns; physical-border pairs only tested)",
+                        labels=dict(x="To Country", y="From Country", color="Approx. BF₁₀"),
+                        title="Approx. BF₁₀ values (rows predict columns; physical-border pairs only tested)",
                         color_continuous_scale="YlOrRd",
                         aspect="auto"
                     )
                     st.plotly_chart(fig, use_container_width=True)
 
-                    st.subheader("Corrected P-value Heatmap (FDR)")
+                    st.subheader("Corrected Q-value Heatmap (FDR)")
                     fig_q = px.imshow(
                         pval_mat_corr.astype(float),
-                        labels=dict(x="To Country", y="From Country", color="q-value"),
-                        title="FDR-corrected p-values (rows predict columns; physical-border pairs only)",
+                        labels=dict(x="To Country", y="From Country", color="Q-value"),
+                        title="FDR-corrected q-values (rows predict columns; physical-border pairs only)",
                         color_continuous_scale="RdYlGn_r",
                         zmin=0,
                         zmax=0.1,
@@ -1364,29 +1391,36 @@ def main():
                                 continue
 
                             bf = bf_mat.loc[src, dst]
-                            pcorr = pval_mat_corr.loc[src, dst]
+                            qcorr = pval_mat_corr.loc[src, dst]
 
                             passes = pd.notna(bf) and (bf >= bf_thresh)
                             if require_sig_global:
-                                passes = passes and pd.notna(pcorr) and (pcorr < 0.05)
+                                passes = passes and pd.notna(qcorr) and (qcorr < 0.05)
 
                             if passes:
                                 edges_global.append((src, dst))
-                                if pd.notna(pcorr):
-                                    edge_labels_global[(src, dst)] = f"BF={bf:.1f}, q={pcorr:.3f}"
+                                if pd.notna(qcorr):
+                                    edge_labels_global[(src, dst)] = f"{bf:.1f} | q={qcorr:.3f}"
                                 else:
-                                    edge_labels_global[(src, dst)] = f"BF={bf:.1f}"
+                                    edge_labels_global[(src, dst)] = f"{bf:.1f}"
 
                     st.subheader("Global Network (Physical Borders Only)")
-                    st.caption("All candidate countries are included, but only actual land-border pairs are tested and drawn.")
+                    st.caption(
+                        "All candidate countries are included, but only actual land-border pairs are tested and drawn. "
+                        "Bidirectional labels are separated near the source side of each arrow."
+                    )
 
                     if not edges_global:
                         st.info("No qualifying relationships detected under the current thresholds.")
                     else:
                         st.success(f"Found {len(edges_global)} qualifying neighbor relationships")
+                        title_suffix = f"Approx. BF₁₀ ≥ {bf_thresh}"
+                        if require_sig_global:
+                            title_suffix += ", q < 0.05"
                         draw_directed_network(
-                            common, edges_global,
-                            f"Global Granger Network (BF₁₀ ≥ {bf_thresh}" + (", q < 0.05)" if require_sig_global else ")"),
+                            common,
+                            edges_global,
+                            f"Global Granger Network ({title_suffix})",
                             edge_labels_global
                         )
 
@@ -1397,10 +1431,7 @@ def main():
         st.header("🗺️ Spatial Autocorrelation Analysis")
         st.info("Examining whether mortality rates in neighboring countries are more similar than expected by chance (Moran's I)")
 
-        spatial_year = st.selectbox(
-            "Select year for spatial analysis",
-            sorted(df["Year"].unique(), reverse=True)
-        )
+        spatial_year = st.selectbox("Select year for spatial analysis", sorted(df["Year"].unique(), reverse=True))
 
         try:
             spatial_result = compute_spatial_autocorrelation(df, spatial_year, cause_code)
@@ -1409,9 +1440,9 @@ def main():
                 col1, col2 = st.columns(2)
                 with col1:
                     st.metric("Moran's I", f"{spatial_result['morans_i']:.3f}")
-                    if spatial_result['morans_i'] > 0.3:
+                    if spatial_result["morans_i"] > 0.3:
                         st.success("Strong positive spatial autocorrelation")
-                    elif spatial_result['morans_i'] > 0:
+                    elif spatial_result["morans_i"] > 0:
                         st.info("Weak positive spatial autocorrelation")
                     else:
                         st.warning("Negative or no spatial autocorrelation")
@@ -1445,31 +1476,34 @@ def main():
 
             if not panel_clean.empty:
                 zf.writestr("regression_panel_data.csv", panel_clean.to_csv(index=False))
-                zf.writestr("regression_coefficients.csv",
-                            reg_coefs.to_frame("Coefficient").to_csv())
+                zf.writestr("regression_coefficients.csv", reg_coefs.to_frame("Coefficient").to_csv())
 
             if not clust_df.empty:
                 zf.writestr("cluster_assignments.csv", clust_df.to_csv(index=False))
 
             if isinstance(bf_mat, pd.DataFrame) and (not bf_mat.empty):
-                zf.writestr("global_granger_bf10.csv", bf_mat.to_csv())
+                zf.writestr("global_granger_approx_bf10.csv", bf_mat.to_csv())
             if isinstance(pval_mat, pd.DataFrame) and (not pval_mat.empty):
                 zf.writestr("global_granger_pvalues_raw.csv", pval_mat.to_csv())
             if isinstance(pval_mat_corr, pd.DataFrame) and (not pval_mat_corr.empty):
-                zf.writestr("global_granger_pvalues_fdr.csv", pval_mat_corr.to_csv())
+                zf.writestr("global_granger_qvalues_fdr.csv", pval_mat_corr.to_csv())
             if edges_global:
-                zf.writestr("global_network_edges.csv",
-                            pd.DataFrame(edges_global, columns=["source", "target"]).to_csv(index=False))
+                zf.writestr(
+                    "global_network_edges.csv",
+                    pd.DataFrame(edges_global, columns=["source", "target"]).to_csv(index=False)
+                )
 
             if isinstance(bf_n, pd.DataFrame) and (not bf_n.empty):
-                zf.writestr("neighbor_granger_bf10.csv", bf_n.to_csv())
+                zf.writestr("neighbor_granger_approx_bf10.csv", bf_n.to_csv())
             if isinstance(pval_n, pd.DataFrame) and (not pval_n.empty):
                 zf.writestr("neighbor_granger_pvalues_raw.csv", pval_n.to_csv())
             if isinstance(pval_n_corr, pd.DataFrame) and (not pval_n_corr.empty):
-                zf.writestr("neighbor_granger_pvalues_fdr.csv", pval_n_corr.to_csv())
+                zf.writestr("neighbor_granger_qvalues_fdr.csv", pval_n_corr.to_csv())
             if edges_n:
-                zf.writestr("neighbor_network_edges.csv",
-                            pd.DataFrame(edges_n, columns=["source", "target"]).to_csv(index=False))
+                zf.writestr(
+                    "neighbor_network_edges.csv",
+                    pd.DataFrame(edges_n, columns=["source", "target"]).to_csv(index=False)
+                )
 
             metadata = f"""
 European Public Health Dashboard - Analysis Report
@@ -1484,8 +1518,9 @@ Analysis Parameters:
 
 Notes:
 - Granger networks use physical-border filtering via NEIGHBORS dictionary.
-- P-values in network sections are FDR-corrected.
-- BF10 is approximated from BIC.
+- P-values in network sections are FDR-corrected into q-values.
+- Evidence values are BIC-based approximations to BF10, not full Bayesian Bayes factors.
+- The "Detected Segments" table corresponds to the segmented-fit panels.
 """
             zf.writestr("README.txt", metadata)
 
@@ -1499,12 +1534,15 @@ Notes:
         )
 
         st.markdown("---")
-        st.markdown("""
-        <div style='text-align: center; color: gray; padding: 20px;'>
-        <p>European Public Health Dashboard v2.1</p>
-        <p>Data Source: Eurostat | Analysis Framework: Time Series, Spatial Methods, and Border-Constrained Granger Networks</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div style='text-align: center; color: gray; padding: 20px;'>
+            <p>European Public Health Dashboard v2.2</p>
+            <p>Data Source: Eurostat | Analysis Framework: Time Series, Spatial Methods, and Border-Constrained Granger Networks</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
     except Exception as e:
         st.error("🚨 An unexpected error occurred. Please check your selections and try again.")
@@ -1512,6 +1550,7 @@ Notes:
         import traceback
         with st.expander("Show full error trace"):
             st.code(traceback.format_exc())
+
 
 if __name__ == "__main__":
     main()
