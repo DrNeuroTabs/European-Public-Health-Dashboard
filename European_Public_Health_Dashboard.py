@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 
-__version__ = '4.9.2'
+__version__ = '4.9.3'
 REQUIREMENTS_TEXT = 'numpy==2.3.5\npandas==2.2.3\nscipy==1.17.0\nstatsmodels==0.15.0\nprophet==1.5.0\ncmdstanpy==1.3.0\nruptures==1.1.10\nscikit-learn==1.8.0\nstreamlit==1.66.0\npycountry==26.2.16\nplotly==7.1.0\n'
 
 
@@ -2010,6 +2010,10 @@ PREVIOUS_ANALYSIS_RELEASES={
         'd96132fff5d19c1c444b45ee6a7c03d95e1033a2e60800ed01cb5840360c1864',  # Original release
         '7be8ed608cae3c105fa9f1be92ad0d77f08e8d22d8281b3a13749c66cb18313c',  # GitHub upload with misencoded labels
     },
+    '4.9.2':{
+        'f1eff4359d5d1f78aa1f59335a26dfba9c4e2e46136805cb9639271fd1b394d6',  # Original release
+        'de51b4efc831c8513b4942a35e5ce3f26fb0a93e16dfade94dbdad55b5b8293c',  # GitHub upload with CRLF line endings
+    },
 }
 
 
@@ -2128,7 +2132,8 @@ def render_archive_inputs(raw,selected_source):
                     label=op['kind'].replace('_',' ').capitalize()
                     if op['kind']=='context_screen':label+=' ('+str(s.get('context_mode','')).replace('_',' ')+')'
                     if s.get('exclude_flags'):label+=' \xb7 omit b/d/u'
-                    return f"{i+1}. {label} \xb7 {CAUSES.get(s.get('cause'),s.get('cause',''))} \xb7 {'\u2013'.join(map(str,years))}"
+                    year_label='\u2013'.join(map(str,years))
+                    return f"{i+1}. {label} \xb7 {CAUSES.get(s.get('cause'),s.get('cause',''))} \xb7 {year_label}"
                 idx=st.selectbox('Saved settings',list(range(len(operations))),format_func=describe,key='open_analysis_index')
                 op=operations[idx];s=op['settings'];_check_archive_settings(s)
                 if op['kind']=='history_forecast':
