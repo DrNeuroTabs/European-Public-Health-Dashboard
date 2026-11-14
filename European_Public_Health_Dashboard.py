@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 
-__version__ = '4.8.0'
+__version__ = '4.9.1'
 REQUIREMENTS_TEXT = 'numpy==2.3.5\npandas==2.2.3\nscipy==1.17.0\nstatsmodels==0.15.0\nprophet==1.5.0\ncmdstanpy==1.3.0\nruptures==1.1.10\nscikit-learn==1.8.0\nstreamlit==1.66.0\npycountry==26.2.16\nplotly==7.1.0\n'
 
 
@@ -19,7 +19,9 @@ AGE_LABELS = {'TOTAL':'All ages','Y_LT65':'Under 65','Y_GE65':'65 and older'}
 MODERN_COLLECTION = 'hlth_cd_asdr2'
 HISTORICAL_COLLECTION = 'hlth_cd_asdr'
 COLLECTION_BREAK = 2011
-COLLECTION_LABELS = {HISTORICAL_COLLECTION:'Historical', MODERN_COLLECTION:'Modern'}
+BOTH_ANALYSIS = 'both_within_collections'
+COLLECTION_LABELS = {HISTORICAL_COLLECTION:'Historical', MODERN_COLLECTION:'Modern',
+                     BOTH_ANALYSIS:'Both collections (account for the reporting break)'}
 COMBINED_COLLECTIONS = 'Historical + modern'
 MORTALITY_SOURCES = {
     'Modern only (2011 onward)':(MODERN_COLLECTION,),
@@ -50,7 +52,9 @@ FACTOR_SPECS = {
  'Daily smoking among citizens': dict(dataset='hlth_ehis_sk1c', filters={'freq':'A','unit':'PC','smoking':'SM_DAY','sex':'T','age':'Y_GE18','citizen':'NAT'}, definition='Daily smoking percentage among reporting-country citizens aged 18 and older; survey years only.'),
  'Hospital beds': dict(dataset='hlth_rs_bdsrg2', filters={'freq':'A','unit':'P_HTHAB'}, definition='Available hospital beds per 100,000 inhabitants.'),
  'Practising physicians': dict(dataset='hlth_rs_prs2', filters={'freq':'A','unit':'P_HTHAB','wstatus':'PRACT','med_spec':'PHYS'}, definition='Practising physicians per 100,000 inhabitants, excluding nurses and other professions.'),
- 'Doctor visit in past year': dict(dataset='hlth_ehis_am1e', filters={'freq':'A','unit':'PC','duration':'Y_LT1','isco08':'OC221','isced11':'TOTAL','sex':'T','age':'TOTAL'}, definition='Percentage reporting a visit to a medical doctor within the preceding year; all educational levels; survey years only.')
+ 'Doctor visit in past year': dict(dataset='hlth_ehis_am1e', filters={'freq':'A','unit':'PC','duration':'Y_LT1','isco08':'OC221','isced11':'TOTAL','sex':'T','age':'TOTAL'}, definition='Percentage reporting a visit to a medical doctor within the preceding year; all educational levels; survey years only.'),
+ 'At-risk-of-poverty rate': dict(dataset='ilc_li02', filters={'freq':'A','statinfo':'MED_EI','unit':'PC','rskpovth':'B_60','age':'TOTAL','sex':'T'}, definition='Percentage with equivalised disposable income after social transfers below 60% of the national median.'),
+ 'Severe material and social deprivation': dict(dataset='ilc_mdsd11', filters={'freq':'A','unit':'PC','age':'TOTAL','sex':'T'}, definition='Percentage unable to afford at least seven of the thirteen EU-SILC deprivation items.')
 }
 
 
@@ -137,13 +141,21 @@ def parse_jsonstat(payload: dict, dataset: str) -> tuple[pd.DataFrame,dict]:
         raise ValueError(payload['error'])
     if payload.get('warning') or 'id' not in payload:
         raise ValueError('Eurostat did not return a completed JSON-stat data cube; narrow the query or retry later')
-    dims = payload['id']; sizes=payload['size']
-    codes = [category_codes(payload['dimension'][d]['category']) for d in dims]
+    dims=payload['id']; sizes=payload.get('size')
+    if (not isinstance(dims,list) or not 1<=len(dims)<=32 or any(not isinstance(d,str) for d in dims)
+            or len(set(dims))!=len(dims) or not isinstance(sizes,list) or len(dims)!=len(sizes)
+            or any(type(n)!=int or n<1 for n in sizes)):
+        raise ValueError('Invalid Eurostat data dimensions.')
     # Materialise the entire selected cube, including explicitly missing cells.
-    total = int(np.prod(sizes,dtype=np.int64))
-    if total > 2_000_000:
+    total=math.prod(sizes)
+    if total>2_000_000:
         raise ValueError('Query contains over two million cells; select fewer strata')
+    codes=[category_codes(payload['dimension'][d]['category']) for d in dims]
+    if any(len(c)!=n or len(set(c))!=n for c,n in zip(codes,sizes)):
+        raise ValueError('Eurostat category labels do not match the data dimensions.')
     values=payload.get('value',{});status=payload.get('status',{})
+    if not isinstance(values,(list,dict)) or not isinstance(status,(list,dict)):
+        raise ValueError('Invalid Eurostat values or source flags.')
     def cell(obj,i,default):
         if isinstance(obj,list): return obj[i] if i<len(obj) else default
         return obj.get(str(i),default)
@@ -218,7 +230,22 @@ def _request_eurostat(url: str, dataset: str) -> bytes:
     raise RuntimeError(f'Eurostat retrieval failed for {dataset}.') from last
 
 
-def fetch(dataset: str, filters: dict, cache_dir: Path|str, refresh_after: float=0.0):
+def fetch(dataset: str, filters: dict, cache_dir: Path|str, refresh_after: float=0.0, archive=None):
+    if archive is not None:
+        raw,record=archive.response(dataset,filters)
+        payload=json.loads(raw)
+        try:df,meta=parse_jsonstat(payload,dataset)
+        except (TypeError,KeyError,AttributeError) as exc:
+            raise ValueError('A captured Eurostat response has an invalid data structure.') from exc
+        for name,value in filters.items():
+            if name in df:
+                values=value if isinstance(value,(list,tuple)) else [value]
+                df=df[df[name].isin(map(str,values))]
+        if 'sinceTimePeriod' in filters:df=df[df.time.astype(int)>=int(filters['sinceTimePeriod'])]
+        if 'untilTimePeriod' in filters:df=df[df.time.astype(int)<=int(filters['untilTimePeriod'])]
+        if df.empty or not df.value.notna().any():
+            raise NoEurostatObservations('The archive has no observations matching this selection.')
+        return df,meta|record|{'snapshot_bytes':raw}
     cache_dir=Path(cache_dir);cache_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
     url=query_url(dataset,filters);request_hash=sha256(url.encode())[:20]
     record_path=cache_dir/f'{dataset}_{request_hash}.manifest.json'
@@ -291,14 +318,14 @@ def prepare_mortality(df:pd.DataFrame) -> pd.DataFrame:
     x['CountryISO2']=x['Country'].replace(GEO_ALIASES)
     return x.sort_values(keys).reset_index(drop=True)
 
-def load_mortality(causes,cache_dir,source='hlth_cd_asdr2',geographies=None,refresh_after=0.0):
+def load_mortality(causes,cache_dir,source='hlth_cd_asdr2',geographies=None,refresh_after=0.0,archive=None):
     requested=[]
     for c in causes:
         requested.extend(['TOTAL','A-R_V-Y'] if c=='TOTAL' else [c])
     filters={'freq':'A','unit':'RT','age':['TOTAL','Y_LT65','Y_GE65'],'sex':['T','F','M'],'icd10':list(dict.fromkeys(requested))}
     if geographies is None:filters['geo']=list(EU27)+['CH','LI','NO','IS','UK','RS','TR','EU27_2020']
     else:filters['geo']=list(geographies)
-    df,meta=fetch(source,filters,cache_dir,refresh_after=refresh_after)
+    df,meta=fetch(source,filters,cache_dir,refresh_after=refresh_after,archive=archive)
     data=prepare_mortality(df)
     if source==HISTORICAL_COLLECTION:
         data=data[data.Year<COLLECTION_BREAK]
@@ -307,23 +334,23 @@ def load_mortality(causes,cache_dir,source='hlth_cd_asdr2',geographies=None,refr
     if not data.Rate.notna().any():raise NoEurostatObservations('Eurostat has no values for this selection.')
     return data,meta
 
-def load_factor(name,cache_dir,sex='T',geographies=None,refresh_after=0.0):
+def load_factor(name,cache_dir,sex='T',geographies=None,refresh_after=0.0,archive=None):
     spec=FACTOR_SPECS[name];selectors=dict(spec['filters'])
     if 'sex' in selectors:selectors['sex']=sex
     filters=dict(selectors);filters['geo']=list(geographies or EU27)
-    raw,meta=fetch(spec['dataset'],filters,cache_dir,refresh_after=refresh_after)
+    raw,meta=fetch(spec['dataset'],filters,cache_dir,refresh_after=refresh_after,archive=archive)
     selected=select_dimensions(raw,selectors)
     out=selected[['geo','time','value','flag']].rename(columns={'geo':'Country','time':'Year','value':name,'flag':'FactorFlag'})
     out['Year']=out['Year'].astype(int)
     meta.update({'indicator_name':name,'definition':spec['definition'],'selectors':selectors})
     return out,meta
 
-def load_population(cache_dir,years,refresh_after=0.0):
+def load_population(cache_dir,years,refresh_after=0.0,archive=None):
     """Retrieve annual country population counts for the selected calendar range."""
     first,last=map(int,years)
     selectors={'freq':'A','age':'TOTAL','sex':'T'}
     filters=selectors|{'geo':list(EU27),'sinceTimePeriod':first,'untilTimePeriod':last}
-    raw,meta=fetch('demo_pjan',filters,cache_dir,refresh_after=refresh_after)
+    raw,meta=fetch('demo_pjan',filters,cache_dir,refresh_after=refresh_after,archive=archive)
     selected=select_dimensions(raw,selectors|{'unit':'NR'})
     out=selected[['geo','time','value','flag']].rename(
         columns={'geo':'Country','time':'Year','value':'Population','flag':'PopulationFlag'})
@@ -614,8 +641,14 @@ def _fit_method(z:np.ndarray,horizon:int,method:str,years:np.ndarray,alpha:float
     if np.any(lo>hi):raise ValueError('Invalid prediction interval')
     return {'mean':mean,'low':lo,'high':hi,'warnings':sorted(set(str(w.message) for w in caught))}
 
+def _damped_drift_point(rates, horizon):
+    """Same log1p point and damping as the single-collection forecast benchmark."""
+    z=_portable_log1p(rates)
+    phi=.8
+    return float(max(0,np.expm1(z[-1]+phi*(1-phi**float(horizon))/(1-phi)*np.diff(z).mean())))
+
 def forecast(series:pd.DataFrame,horizon=3,models=('Ensemble',),alpha=.05,seed=20261016):
-    if horizon<1 or horizon>10:raise ValueError('Forecast horizon must be 1–10 years; predictive validation may support only shorter horizons')
+    if horizon<1 or horizon>10:raise ValueError('Forecast horizon must be 1â€“10 years; predictive validation may support only shorter horizons')
     x=consecutive_series(series,minimum=8)
     if (x.Rate<0).any():raise ValueError('Mortality rates cannot be negative')
     years=x.Year.to_numpy(int);z=_portable_log1p(x.Rate.to_numpy(float));requested=list(models)
@@ -938,8 +971,11 @@ from statsmodels.stats.multitest import multipletests
 from statsmodels.tsa.stattools import adfuller,kpss
 
 
+def cluster_summary(info):
+    return pd.DataFrame([{key:info[key] for key in ('k','silhouette','representation','n_countries','stability_runs','median_year_resampling_ARI','seed')}])
+
 def predictive_network(panel:pd.DataFrame,lag=1,dmax=1,min_residual_df=8):
-    if lag not in (1,2,3):raise ValueError('Lag must be 1–3 years')
+    if lag not in (1,2,3):raise ValueError('Lag must be 1â€“3 years')
     if dmax!=1:raise ValueError('This experimental implementation assumes integration order no greater than one')
     panel=panel.sort_index()
     if panel.index.duplicated().any() or np.any(np.diff(panel.index.to_numpy(int))!=1):raise ValueError('Network years must be unique and consecutive')
@@ -1125,13 +1161,16 @@ def make_archive(analyses:dict,snapshot_metadata:list[dict]):
         operations.append(op)
     snapshots=[]
     for meta in snapshot_metadata:
-        record={k:v for k,v in meta.items() if k not in ('snapshot_path','labels')}
-        path=Path(meta.get('snapshot_path',''))
-        if not path.is_file():raise FileNotFoundError('A saved Eurostat response is no longer available for export: '+path.name)
-        if path.is_file():
-            name='snapshots/'+path.name;content=path.read_bytes()
-            if hashlib.sha256(content).hexdigest()!=meta['sha256']:raise ValueError('Source snapshot checksum mismatch during export')
-            files[name]=content;record['archive_file']=name
+        record={k:v for k,v in meta.items() if k not in ('snapshot_path','snapshot_bytes','labels')}
+        content=meta.get('snapshot_bytes')
+        if content is None:
+            path=Path(meta.get('snapshot_path',''))
+            if not path.is_file():
+                raise FileNotFoundError('A saved Eurostat response is no longer available for export: '+path.name)
+            content=path.read_bytes()
+        if sha256(content)!=meta['sha256']:raise ValueError('Source snapshot checksum mismatch during export')
+        name=f"snapshots/{meta['dataset']}_{meta['sha256']}.json"
+        files[name]=content;record['archive_file']=name
         snapshots.append(record)
     manifest={'software_version':__version__,'generated_utc':datetime.now(timezone.utc).isoformat(),'environment':environment(),
               'operations':operations,'source_snapshots':snapshots,
@@ -1208,6 +1247,23 @@ def mortality_panel(mortality, settings):
             'coverage':coverage,'flagged':data[data.Flag.astype(str).str.strip().ne('')].reset_index(drop=True)}
 
 
+def mortality_coverage_tables(mortality,settings):
+    """Audit the source cells over all recorded age and sex strata."""
+    data=mortality[mortality.Year.between(*settings['years'])&
+                   mortality.Country.isin((*EU27,'EU27_2020'))].copy()
+    assert_unique(data,['Country','Cause','Year','Sex','Age'],'mortality coverage')
+    data['Population']=np.where(data.Country.eq('EU27_2020'),'Official EU aggregate','EU27 countries')
+    data['Flagged']=data.Flag.fillna('').str.strip().ne('')
+    data['DifferentDefinition']=data.Flag.map(lambda value:flag_contains(value,'d'))
+    def counts(columns):
+        return data.groupby(columns,as_index=False).agg(Cells=('Rate','size'),Observed=('Rate','count'),
+            Missing=('Rate',lambda x:x.isna().sum()),Zero=('Rate',lambda x:x.eq(0).sum()),
+            Flagged=('Flagged','sum'),DifferentDefinition=('DifferentDefinition','sum'))
+    return {'coverage':counts(['Population']),
+            'coverage_by_stratum':counts(['Population','Cause','Sex','Age']),
+            'flagged_cells':data.loc[data.Flagged,['Country','Cause','Sex','Age','Year','Rate','Flag']].reset_index(drop=True)}
+
+
 def dispersion_tables(mortality,settings,population=None):
     years=settings['years'];countries=settings['countries'];base=settings.get('fixed_weight_year',years[0])
     annual=fixed_panel_dispersion(mortality,years,countries)
@@ -1264,12 +1320,12 @@ def gdp_sensitivity(mortality,gdp,settings):
     data=mortality[mortality.Country.isin(EU27)&mortality.Year.between(first,last)]
     rows=[];exclusions=[]
     for cause,g in data.groupby('Cause'):
-        label=f'{first}–{last}'
+        label=f'{first}â€“{last}'
         panel=g[['Country','Year','Rate']].rename(columns={'Rate':'Mortality'}).merge(
             gdp[['Country','Year','GDP per capita']],on=['Country','Year'],validate='one_to_one')
         flagged=set(g.loc[g.Flag.map(flag_contains),'Country'])
         variants=[(label,panel)]
-        if before is not None and first<=before<last:variants.append((f'{first}–{before}',panel[panel.Year<=before]))
+        if before is not None and first<=before<last:variants.append((f'{first}â€“{before}',panel[panel.Year<=before]))
         variants.append(('Exclude b/d/u series',panel[~panel.Country.isin(flagged)]))
         for spec,sub in variants:
             discarded=int(sub.Mortality.le(0).sum())
@@ -1283,9 +1339,10 @@ def gdp_sensitivity(mortality,gdp,settings):
             except ValueError as exc:exclusions.append({'Cause':cause,'Specification':spec,'Error':str(exc)})
     output=pd.DataFrame(rows)
     if not output.empty:
-        output['q']=np.nan
-        for _,idx in output.groupby('Specification').groups.items():output.loc[idx,'q']=adjust_pvalues(output.loc[idx]).q
-    else:output=pd.DataFrame(columns=['Cause','Specification','Coefficient','CI_low','CI_high','p','q'])
+        for _,idx in output.groupby('Specification').groups.items():
+            output.loc[idx,'q']=adjust_pvalues(output.loc[idx]).q
+            output.loc[idx,'q_BY']=adjust_pvalues(output.loc[idx],output='q_BY',method='fdr_by').q_BY
+    else:output=pd.DataFrame(columns=['Cause','Specification','Coefficient','CI_low','CI_high','p','q','q_BY'])
     return {'associations':output,'ineligible':pd.DataFrame(exclusions,columns=['Cause','Specification','Error'])}
 
 
@@ -1299,7 +1356,8 @@ def compare_moran(mortality,settings):
             result[f"weights_{cause}"]=weights.reset_index().rename(columns={'index':'Country'})
         except ValueError as exc:failures.append({'Cause':cause,'Reason':str(exc)})
     stats=pd.DataFrame(rows)
-    result['associations']=adjust_pvalues(stats) if len(stats) else pd.DataFrame(columns=['Cause','Moran_I','p','q'])
+    result['associations']=(adjust_pvalues(adjust_pvalues(stats),output='q_BY',method='fdr_by')
+                            if len(stats) else pd.DataFrame(columns=['Cause','Moran_I','p','q','q_BY']))
     result['ineligible']=pd.DataFrame(failures,columns=['Cause','Reason'])
     return result
 
@@ -1389,8 +1447,430 @@ def rolling_benchmark(mortality,settings,progress=None):
         'failed_fits':pd.DataFrame(failures,columns=['Country','Cause','Origin','Model','Error'])}
 
 
+
+# Analyses using both mortality collections. Rates and lags never cross 2011.
+from scipy.linalg import helmert, qr
+from scipy.stats import f as f_distribution, rankdata, spearmanr
+from threadpoolctl import threadpool_limits
+
+ERA_CODES=(HISTORICAL_COLLECTION,MODERN_COLLECTION)
+
+
+def analysis_rates(data, settings):
+    x=data.copy()
+    x['Year']=pd.to_numeric(x['Year'],errors='raise').astype(int)
+    x['Rate']=pd.to_numeric(x['Rate'],errors='coerce')
+    x=x[x.Year.between(*settings['years']) & x.dataset.isin(ERA_CODES)]
+    valid=((x.dataset==HISTORICAL_COLLECTION)&(x.Year<COLLECTION_BREAK) |
+           (x.dataset==MODERN_COLLECTION)&(x.Year>=COLLECTION_BREAK))
+    if not valid.all():raise ValueError('A rate falls outside its Eurostat collection.')
+    assert_unique(x,['dataset','Country','Cause','Year'],'mortality input')
+    x=x[x.Rate.notna() & np.isfinite(x.Rate) & x.Rate.ge(0)]
+    if settings.get('exclude_flags'):
+        x=x[~x.Flag.fillna('').map(flag_contains)]
+    return x.sort_values(['dataset','Country','Cause','Year']).reset_index(drop=True)
+
+
+def within_collection_changes(data):
+    x=data.loc[data.Rate.gt(0),['dataset','Country','Cause','Year','Rate','Flag']].copy()
+    x=x.sort_values(['dataset','Country','Cause','Year'])
+    groups=x.groupby(['dataset','Country','Cause'],sort=False)
+    x['PreviousYear']=groups.Year.shift()
+    x['PreviousRate']=groups.Rate.shift()
+    x['PreviousFlag']=groups.Flag.shift()
+    x=x[x.Year.eq(x.PreviousYear+1)].copy()
+    x['PreviousYear']=x.PreviousYear.astype(int)
+    x['LogChange']=np.log(x.Rate)-np.log(x.PreviousRate)
+    x['AnnualChangePercent']=100*np.expm1(x.LogChange)
+    return x.reset_index(drop=True)
+
+
+def _stack_tables(frames, columns):
+    return pd.concat(frames,ignore_index=True) if frames else pd.DataFrame(columns=columns)
+
+
+def history_temporal_tables(data, s):
+    x=analysis_rates(data,s)
+    x=x[x.Country.eq(s['country']) & x.Cause.eq(s['cause'])]
+    changes=within_collection_changes(x)
+    seg,detail,summary,excluded=[],[],[],[]
+    for code,g in x.groupby('dataset',sort=False):
+        c=changes[changes.dataset.eq(code)]
+        summary.append({'dataset':code,'FirstYear':int(g.Year.min()),'LastYear':int(g.Year.max()),
+                        'ObservedYears':len(g),'AnnualChanges':len(c),
+                        'GeometricMeanChangePercent':100*np.expm1(c.LogChange.mean()) if len(c) else np.nan})
+        for _,run in g.groupby(g.Year.diff().ne(1).cumsum(),sort=False):
+            if len(run)<4:
+                excluded.append({'dataset':code,'StartYear':int(run.Year.iloc[0]),'EndYear':int(run.Year.iloc[-1]),
+                                 'Reason':'Fewer than four consecutive rates'})
+                continue
+            fitted,outliers=temporal_summary(run[['Year','Rate']],s['penalty_multiplier'])
+            seg.append(fitted.assign(dataset=code));detail.append(outliers.assign(dataset=code))
+    if changes.dataset.nunique()==2:
+        summary.append({'dataset':BOTH_ANALYSIS,'FirstYear':int(x.Year.min()),'LastYear':int(x.Year.max()),
+                        'ObservedYears':len(x),'AnnualChanges':len(changes),
+                        'GeometricMeanChangePercent':100*np.expm1(changes.LogChange.mean())})
+    return {'summary':pd.DataFrame(summary,columns=['dataset','FirstYear','LastYear','ObservedYears','AnnualChanges','GeometricMeanChangePercent']),
+            'segments':_stack_tables(seg,['start_year','end_year','n','mean_rate','APC','APC_low','APC_high','selection','dataset']),
+            'anomalies':_stack_tables(detail,['Year','Rate','ResidualScore','PotentialAnomaly','dataset']),
+            'annual_changes':changes,
+            'excluded':pd.DataFrame(excluded,columns=['dataset','StartYear','EndYear','Reason'])}
+
+
+HISTORY_MODELS=('Persistence','Modern log drift','Both-collection log drift')
+
+
+def history_forecast_tables(data,s):
+    x=analysis_rates(data,s)
+    x=x[x.Cause.eq(s['cause']) & x.Country.isin(set(s['countries'])|{s['country']})]
+    changes=within_collection_changes(x)
+    # Keep the original three-model panel. The separate comparison applies the
+    # modern benchmark's eligibility rules and matches the remaining endpoints.
+    future,evals,excluded,matched=[],[],[],[]
+    modern_first=max(COLLECTION_BREAK,s['years'][0])
+    modern_years=set(range(modern_first,s['years'][1]+1))
+    for country in sorted(set(s['countries'])|{s['country']}):
+        g=x[x.Country.eq(country)]
+        modern=g[g.dataset.eq(MODERN_COLLECTION)&g.Rate.gt(0)].set_index('Year').Rate
+        modern_full=g[g.dataset.eq(MODERN_COLLECTION)&g.Rate.notna()].set_index('Year').Rate
+        complete_modern=set(modern_full.index)==modern_years and len(modern_full)>=9
+        old=changes.loc[changes.Country.eq(country)&changes.dataset.eq(HISTORICAL_COLLECTION),'LogChange'].to_numpy()
+        if len(old)<8 or len(modern)<8:
+            excluded.append({'Country':country,'HistoricalChanges':len(old),'ModernRates':len(modern),
+                             'Reason':'Needs eight historical changes and at least eight consecutive modern rates.'})
+            continue
+        tested=0
+        for origin in modern.index:
+            tail=[]
+            t=int(origin)
+            while t in modern.index:
+                tail.append(float(modern[t])); t-=1
+            if len(tail)<8:continue
+            observed=np.array(tail[::-1]); mr=np.diff(np.log(observed))
+            scale=float(np.mean(np.abs(np.diff(observed))))
+            drift=(0.,float(mr.mean()),float(np.r_[old,mr].mean()))
+            for h in range(1,int(s['horizon'])+1):
+                year=int(origin)+h
+                for name,b in zip(HISTORY_MODELS,drift):
+                    point=float(observed[-1]*np.exp(h*b))
+                    row={'Country':country,'Origin':int(origin),'Year':year,'Horizon':h,'Model':name,
+                         'Prediction':point,'HistoricalChanges':len(old),'ModernChanges':len(mr)}
+                    if country==s['country'] and origin==modern.index[-1]:future.append(row)
+                    if country in s['countries'] and scale>0 and all(y in modern.index for y in range(int(origin)+1,year+1)):
+                        target=float(modern[year]);err=abs(point-target)
+                        evals.append(row|{'Observed':target,'AbsoluteError':err,'ScaledError':err/scale})
+                        if (s.get('compare_damped') and complete_modern and h in (1,3)
+                                and origin-len(observed)+1==modern_first and name==HISTORY_MODELS[-1]):
+                            damped=_damped_drift_point(observed,h)
+                            matched.append({'Country':country,'Cause':s['cause'],'Origin':int(origin),'Year':year,'Horizon':h,
+                                            'Observed':target,'MASEScale':scale,'BothCollectionForecast':point,
+                                            'ModernDampedForecast':damped,'BothCollectionScaledError':err/scale,
+                                            'ModernDampedScaledError':abs(damped-target)/scale})
+                        tested+=1
+        if country in s['countries'] and not tested:
+            excluded.append({'Country':country,'HistoricalChanges':len(old),'ModernRates':len(modern),
+                             'Reason':'No eligible held-out modern target with a positive training scale.'})
+    keys=['Country','Origin','Year','Horizon','Model','Prediction','HistoricalChanges','ModernChanges']
+    pred=pd.DataFrame(evals,columns=keys+['Observed','AbsoluteError','ScaledError'])
+    scores=pred.groupby(['Horizon','Model'],sort=True).agg(Targets=('Observed','size'),Countries=('Country','nunique'),
+                      MAE=('AbsoluteError','mean'),MASE=('ScaledError','mean')).reset_index()
+    paired=pred.pivot(index=['Country','Origin','Year','Horizon'],columns='Model',values='ScaledError').reset_index() if len(pred) else pd.DataFrame()
+    differences=[]
+    if len(paired):
+        rng=np.random.default_rng(20261111)
+        for h,g in paired.groupby('Horizon'):
+            for ref in HISTORY_MODELS[:2]:
+                diff=(g[HISTORY_MODELS[-1]]-g[ref]).groupby(g.Country).mean().to_numpy()
+                sample=rng.choice(diff,size=(5000,len(diff)),replace=True).mean(axis=1)
+                differences.append({'Horizon':h,'Reference':ref,'Countries':len(diff),'Difference':diff.mean(),
+                                    'StabilityLow':np.quantile(sample,.025),'StabilityHigh':np.quantile(sample,.975)})
+    outputs={'forecasts':pd.DataFrame(future,columns=keys),'predictions':pred,'scores':scores,
+            'paired_differences':pd.DataFrame(differences,columns=['Horizon','Reference','Countries','Difference','StabilityLow','StabilityHigh']),
+            'excluded':pd.DataFrame(excluded,columns=['Country','HistoricalChanges','ModernRates','Reason'])}
+    if s.get('compare_damped'):
+        matched_cols=['Country','Cause','Origin','Year','Horizon','Observed','MASEScale','BothCollectionForecast',
+                      'ModernDampedForecast','BothCollectionScaledError','ModernDampedScaledError']
+        targets=pd.DataFrame(matched,columns=matched_cols)
+        summary=[]
+        for h,g in targets.groupby('Horizon'):
+            delta=(g.BothCollectionScaledError-g.ModernDampedScaledError).groupby(g.Country).mean().sort_index()
+            if len(delta)>=2:
+                draws=np.random.default_rng(20261111).choice(delta.to_numpy(),size=(5000,len(delta)),replace=True).mean(axis=1)
+                low,high=np.quantile(draws,[.025,.975])
+            else:low=high=np.nan
+            summary.append({'Horizon':h,'Targets':len(g),'Countries':len(delta),
+                            'BothCollectionMASE':g.BothCollectionScaledError.mean(),
+                            'ModernDampedMASE':g.ModernDampedScaledError.mean(),
+                            'Difference':delta.mean(),'StabilityLow':low,'StabilityHigh':high})
+        outputs['matched_damped_predictions']=targets
+        outputs['matched_damped_scores']=pd.DataFrame(summary,columns=['Horizon','Targets','Countries','BothCollectionMASE',
+            'ModernDampedMASE','Difference','StabilityLow','StabilityHigh'])
+    return outputs
+
+
+def history_comparison_tables(data,s):
+    x=analysis_rates(data,s);x=x[x.Country.eq(s['country'])]
+    causes=s['causes']; paired_frames=[]; rows=[]
+    changes=within_collection_changes(x)
+    both=changes.pivot(index=['dataset','Year'],columns='Cause',values='LogChange').reindex(columns=causes).dropna().reset_index()
+    for code,g in x.groupby('dataset',sort=False):
+        pair=g.pivot(index='Year',columns='Cause',values='Rate').reindex(columns=causes).dropna()
+        if len(pair)<2 or (pair.iloc[0]<=0).any():continue
+        indexed=(100*pair/pair.iloc[0]).rename_axis(columns='Cause').stack().rename('Index').reset_index()
+        paired_frames.append(indexed.assign(dataset=code,BaselineYear=int(pair.index[0])))
+        common=both[both.dataset.eq(code)]
+        for cause in causes:
+            rows.append({'dataset':code,'Cause':cause,'FirstYear':int(pair.index[0]),'LastYear':int(pair.index[-1]),
+                         'FirstRate':float(pair[cause].iloc[0]),'LastRate':float(pair[cause].iloc[-1]),
+                         'ChangePercent':100*(pair[cause].iloc[-1]/pair[cause].iloc[0]-1),'PairedAnnualChanges':len(common),
+                         'ChangeCorrelation':common[causes[0]].corr(common[causes[1]]) if len(common)>=3 else np.nan})
+    correlation=both[causes[0]].corr(both[causes[1]]) if len(both)>=3 else np.nan
+    return {'indexed_rates':_stack_tables(paired_frames,['Year','Cause','Index','dataset','BaselineYear']),
+            'endpoint_changes':pd.DataFrame(rows,columns=['dataset','Cause','FirstYear','LastYear','FirstRate','LastRate','ChangePercent','PairedAnnualChanges','ChangeCorrelation']),
+            'paired_annual_changes':both,'pooled_correlation':pd.DataFrame([{'AnnualChanges':len(both),
+                'Collections':both.dataset.nunique(),'ChangeCorrelation':correlation}])}
+
+
+CONTEXT_SCALES={
+    'GDP per capita':(True,np.log1p(.10),'10% higher GDP per capita'),
+    'Health expenditure':(True,np.log1p(.10),'10% higher expenditure per capita'),
+    'Hospital beds':(False,100.,'100 more beds per 100,000'),
+    'Practising physicians':(False,100.,'100 more practising physicians per 100,000'),
+}
+
+
+def _context_fe(g,name):
+    is_log,scale,unit=CONTEXT_SCALES.get(name,(False,5.,'5 percentage points higher'))
+    g=g[g.Rate.gt(0) & ((g.IndicatorValue>0) if is_log else (g.IndicatorValue>=0))].copy()
+    eligible_eras=g.groupby('dataset').Year.nunique();g=g[g.dataset.isin(eligible_eras[eligible_eras.ge(3)].index)]
+    g['Group']=g.Country+'|'+g.dataset
+    # A singleton supplies no within-group or within-year information.
+    while len(g):
+        keep=g.groupby('Group').Year.transform('size').gt(1) & g.groupby('Year').Country.transform('size').gt(1)
+        if keep.all():break
+        g=g[keep]
+    if g.Country.nunique()<10 or g.Year.nunique()<3:
+        raise ValueError('Needs at least 10 countries and at least three matched years within a collection.')
+    D=np.c_[pd.get_dummies(g.Group,dtype=float),pd.get_dummies(g.Year,dtype=float)]
+    Q,R,_=qr(D,mode='economic',pivoting=True)
+    rank=int(np.sum(abs(np.diag(R))>1e-9));Q=Q[:,:rank]
+    x=g.IndicatorValue.to_numpy(float);x=np.log(x) if is_log else x
+    x=(x-x.mean())/scale
+    within=x-Q@(Q.T@x)
+    if np.linalg.norm(within)<1e-8*max(1,np.linalg.norm(x)):
+        raise ValueError('Indicator has no identifiable within-country variation after year effects.')
+    X=np.column_stack([within,Q]); y=np.log(g.Rate.to_numpy(float))
+    if len(g)-X.shape[1]<10:raise ValueError('Fewer than ten residual degrees of freedom.')
+    fit=sm.OLS(y,X).fit().get_robustcov_results(cov_type='cluster',groups=g.Country.to_numpy(),
+                                               use_correction=True,df_correction=True,use_t=True)
+    estimate=float(fit.params[0]);lo,hi=map(float,fit.conf_int()[0]);p=float(fit.pvalues[0])
+    if not np.isfinite([estimate,lo,hi,p]).all():raise ValueError('Unstable clustered covariance.')
+    return {'Estimate':100*np.expm1(estimate),'Lower95':100*np.expm1(lo),'Upper95':100*np.expm1(hi),'p':p,'Unit':unit},g
+
+
+def context_screen_tables(mortality,indicators,s):
+    if s['context_mode']=='snapshot_spatial':
+        runs=[context_screen_tables(mortality,indicators,s|{'context_mode':'spatial_single','snapshot_year':year})
+              for year in sorted(set(s['snapshot_years']))]
+        if not runs:raise ValueError('Select at least one observation year.')
+        pooled=pd.concat([x['associations'] for x in runs],ignore_index=True)
+        return {'associations':adjust_pvalues(pooled,output='q_BY',method='fdr_by'),
+                'matched_observations':pd.concat([x['matched_observations'] for x in runs],ignore_index=True)}
+    rates=analysis_rates(mortality,s);rates=rates[rates.Country.isin(s['countries'])]
+    f=indicators.copy();f['IndicatorValue']=pd.to_numeric(f.IndicatorValue,errors='coerce')
+    f=f[f.IndicatorValue.notna()&np.isfinite(f.IndicatorValue)]
+    assert_unique(f,['Indicator','Country','Year'],'contextual data')
+    if s.get('exclude_flags'):f=f[~f.IndicatorFlag.fillna('').map(flag_contains)]
+    if s['context_mode'] in ('snapshot','spatial_single'):rates=rates[rates.Year.eq(int(s['snapshot_year']))]
+    rows=[];matched=[]
+    for cause in s['causes']:
+        g=rates[rates.Cause.eq(cause)][['Country','Year','Rate','Flag','dataset']]
+        for name in s['indicators']:
+            j=g.merge(f[f.Indicator.eq(name)][['Country','Year','IndicatorValue','IndicatorFlag']],
+                      on=['Country','Year'],how='inner',validate='one_to_one')
+            record={'Cause':cause,'Indicator':name,'MatchedRows':len(j),'MatchedCountries':j.Country.nunique(),
+                    'MatchedYears':j.Year.nunique(),'Estimate':np.nan,'Lower95':np.nan,'Upper95':np.nan,'p':np.nan,
+                    'Unit':'','RowsUsed':0,'CountriesUsed':0,'FirstYear':np.nan,'LastYear':np.nan,'Collections':0,'Status':'Estimated'}
+            try:
+                if s['context_mode']=='annual':
+                    stats,used=_context_fe(j,name)
+                elif s['context_mode']=='spatial_single':
+                    stats,used=_spectral_rank_test(j)
+                else:
+                    if j.Country.nunique()<10 or min(j.Rate.nunique(),j.IndicatorValue.nunique())<2:
+                        raise ValueError('Needs ten countries with both measurements and variation in both.')
+                    rho=float(spearmanr(j.Rate,j.IndicatorValue).statistic)
+                    stats={'Estimate':rho,'Unit':'Spearman rank correlation (descriptive)'};used=j
+                record.update(stats);record.update(RowsUsed=len(used),CountriesUsed=used.Country.nunique(),
+                              FirstYear=int(used.Year.min()),LastYear=int(used.Year.max()),Collections=used.dataset.nunique())
+                matched.append(used.drop(columns='Group',errors='ignore').assign(Cause=cause,Indicator=name))
+            except ValueError as exc:record['Status']=str(exc)
+            if s['context_mode']=='spatial_single':record['ObservationYear']=int(s['snapshot_year'])
+            rows.append(record)
+    results=pd.DataFrame(rows)
+    if not results.empty:results=adjust_pvalues(results,output='q_BY',method='fdr_by')
+    return {'associations':results,'matched_observations':_stack_tables(matched,
+            ['Country','Year','Rate','Flag','dataset','IndicatorValue','IndicatorFlag','Cause','Indicator'])}
+
+
+def _spectral_rank_test(g,permutations=9999,seed=20261111):
+    """Singleton Moran spectral null: preserve variance and global Moran I."""
+    g=g.sort_values('Country');A,_=weight_matrix(g.Country)
+    g=g.iloc[np.flatnonzero(A.sum(axis=1)>0)];n=len(g)
+    if n<10 or min(g.Rate.nunique(),g.IndicatorValue.nunique())<2:
+        raise ValueError('Needs ten connected countries with variation in both measurements.')
+    _,W=weight_matrix(g.Country);Q=helmert(n,full=False).T
+    _,vectors=np.linalg.eigh(Q.T@((W+W.T)/2)@Q);E=Q@vectors
+    x=rankdata(g.IndicatorValue);y=rankdata(g.Rate);x-=x.mean();y-=y.mean()
+    terms=(E.T@x)*(E.T@y)/(np.linalg.norm(x)*np.linalg.norm(y));rho=float(terms.sum())
+    rng=np.random.default_rng(seed);signs=2*rng.integers(0,2,size=(permutations,n-1),dtype=np.int8)-1
+    simulated=signs@terms
+    p=(1+np.count_nonzero(abs(simulated)>=abs(rho)-1e-12))/(permutations+1)
+    return {'Estimate':rho,'p':p,'Unit':'Spearman rank correlation; spatial null'},g
+
+
+def spatial_year_tables(data,s):
+    x=analysis_rates(data,s);x=x[x.Cause.eq(s['cause'])&x.Country.isin(s['countries'])]
+    years=sorted(set(s['map_years']))
+    panel=x.pivot(index='Country',columns='Year',values='Rate').reindex(columns=years).dropna()
+    if len(panel)<5:raise ValueError('Fewer than five countries have rates in every selected year.')
+    rows=[]
+    for year in years:
+        m,_=moran(panel[year],permutations=9999)
+        rows.append({'Year':year,'Moran_I':m['Moran_I'],'p':m['p'],'Countries':m['n_countries'],
+                     'Isolates':';'.join(m['isolates_excluded'])})
+    return {'spatial_association':adjust_pvalues(pd.DataFrame(rows),output='q_BY',method='fdr_by'),
+            'rates':x[x.Year.isin(years)&x.Country.isin(panel.index)][['Country','Year','Rate','Flag','dataset']]}
+
+
+def history_spatial_tables(data,s):
+    x=analysis_rates(data,s);x=x[x.Cause.eq(s['cause']) & x.Country.isin(s['countries'])]
+    first,last=s['years'];ranges={HISTORICAL_COLLECTION:(first,min(last,COLLECTION_BREAK-1)),MODERN_COLLECTION:(max(first,COLLECTION_BREAK),last)}
+    p=x.pivot(index='Country',columns='Year',values='Rate').reindex(index=sorted(s['countries']),columns=range(first,last+1))
+    common=p.dropna();members=pd.DataFrame({'Country':p.index,'Complete':p.notna().all(axis=1).to_numpy(),
+                                           'MissingYears':p.isna().sum(axis=1).to_numpy()})
+    if len(common)<6 or any(b-a<3 for a,b in ranges.values()):
+        raise ValueError('Select at least four years in each collection and six countries with complete rates throughout.')
+    annual=[];endpoints=[];spatial=[];zblocks=[]
+    draws=np.random.default_rng(20261111).integers(0,len(common),size=(10000,len(common)))
+    for code,(a,b) in ranges.items():
+        d=fixed_panel_dispersion(x[x.dataset.eq(code)],(a,b),countries=list(common.index))
+        annual.append(d.assign(dataset=code))
+        q=np.quantile(common[[a,b]].to_numpy()[draws],[.1,.25,.75,.9],axis=1)
+        iqr_change=np.diff(q[2]-q[1],axis=1).ravel()
+        ratio=np.divide(q[3],q[0],out=np.full_like(q[3],np.nan),where=q[0]>0)
+        ratio_change=np.diff(ratio,axis=1).ravel();ratio_change=ratio_change[np.isfinite(ratio_change)]
+        i_lo,i_hi=np.quantile(iqr_change,[.025,.975]);r_lo,r_hi=np.quantile(ratio_change,[.025,.975]) if len(ratio_change) else (np.nan,np.nan)
+        endpoints.append({'dataset':code,'FirstYear':a,'LastYear':b,'Countries':len(common),
+                          'FirstIQR':d.IQR.iloc[0],'LastIQR':d.IQR.iloc[-1],
+                          'FirstRatio':d.P90_P10.iloc[0],'LastRatio':d.P90_P10.iloc[-1],
+                          'IQRChangeLow':i_lo,'IQRChangeHigh':i_hi,'RatioChangeLow':r_lo,'RatioChangeHigh':r_hi,
+                          'ValidRatioResamples':len(ratio_change)})
+        try:
+            stats,_=moran(common[b],permutations=9999)
+            spatial.append({'dataset':code,'Year':b,'Moran_I':stats['Moran_I'],'p':stats['p'],'Countries':stats['n_countries'],
+                            'Isolates':';'.join(stats['isolates_excluded']),'Status':'Estimated'})
+        except ValueError as exc:
+            spatial.append({'dataset':code,'Year':b,'Moran_I':np.nan,'p':np.nan,'Countries':np.nan,'Isolates':'','Status':str(exc)})
+        z=np.log1p(common.loc[:,a:b].to_numpy(float)); spread=z.std(axis=1,keepdims=True)
+        z=np.divide(z-z.mean(axis=1,keepdims=True),spread,out=np.zeros_like(z),where=spread>1e-10)
+        zblocks.append(z)
+    spatial=adjust_pvalues(pd.DataFrame(spatial),output='q_BY',method='fdr_by')
+    Z=np.column_stack([z/np.sqrt(z.shape[1]) for z in zblocks]);valid=np.ptp(Z,axis=1)>1e-10
+    Z=Z[valid];clusters=[];sil=[];info=[];profiles=[]
+    if len(Z)>=6:
+        labels={}
+        with threadpool_limits(limits=1):
+            for k in range(2,min(6,len(Z)-1)+1):
+                lab=KMeans(n_clusters=k,n_init=20,random_state=20261016).fit_predict(Z)
+                if 1<len(set(lab))<len(Z):
+                    sil.append({'Groups':k,'Silhouette':silhouette_score(Z,lab)});labels[k]=lab
+            if sil:
+                best=max(sil,key=lambda row:row['Silhouette']);k=best['Groups'];lab=labels[k]
+                rng=np.random.default_rng(20261016);aris=[]
+                for i in range(100):
+                    columns=np.concatenate([rng.integers(0,z.shape[1],size=z.shape[1])+sum(t.shape[1] for t in zblocks[:j]) for j,z in enumerate(zblocks)])
+                    sample=KMeans(n_clusters=k,n_init=10,random_state=20261017+i).fit_predict(Z[:,columns]);aris.append(adjusted_rand_score(lab,sample))
+                groups=pd.Series(lab+1,index=common.index[valid]);clusters=[{'Country':c,'Cluster':int(k)} for c,k in groups.items()]
+                info=[best|{'Countries':len(lab),'MedianResamplingARI':float(np.median(aris))}]
+                for (code,(a,b)),z in zip(ranges.items(),zblocks):
+                    for k in sorted(groups.unique()):
+                        median=np.median(z[valid][groups.to_numpy()==k],axis=0)
+                        profiles.extend({'dataset':code,'Year':yr,'Cluster':int(k),'MedianStandardisedLogRate':value} for yr,value in zip(range(a,b+1),median))
+    return {'annual_dispersion':pd.concat(annual,ignore_index=True),'dispersion_endpoints':pd.DataFrame(endpoints),
+            'moran':spatial,'members':members,'clusters':pd.DataFrame(clusters,columns=['Country','Cluster']),
+            'cluster_fit':pd.DataFrame(info,columns=['Groups','Silhouette','Countries','MedianResamplingARI']),
+            'silhouettes':pd.DataFrame(sil,columns=['Groups','Silhouette']),
+            'cluster_profiles':pd.DataFrame(profiles,columns=['dataset','Year','Cluster','MedianStandardisedLogRate'])}
+
+
+def _lagged_growth_panel(changes,source,target,lag):
+    p=changes[changes.Country.isin([source,target])].pivot(index=['dataset','Year'],columns='Country',values='LogChange').reindex(columns=[target,source]).reset_index()
+    p=p.rename(columns={target:'Outcome',source:'SourceGrowth'})
+    for i in range(1,lag+1):
+        shifted=p[['dataset','Year','Outcome','SourceGrowth']].copy();shifted['Year']+=i
+        shifted=shifted.rename(columns={'Outcome':f'SelfLag{i}','SourceGrowth':f'NeighbourLag{i}'})
+        p=p.merge(shifted,on=['dataset','Year'],how='left',validate='one_to_one')
+    return p.dropna(subset=['Outcome']+[f'{n}Lag{i}' for n in ('Self','Neighbour') for i in range(1,lag+1)]).sort_values('Year')
+
+
+def _network_design(p,lag):
+    return np.c_[np.ones(len(p)),p.dataset.eq(MODERN_COLLECTION).astype(float),
+                 p[[f'SelfLag{i}' for i in range(1,lag+1)]],p[[f'NeighbourLag{i}' for i in range(1,lag+1)]]]
+
+
+def _within_era_hac(X,res,p):
+    scores=X*res[:,None];meat=scores.T@scores
+    indices={(code,yr):i for i,(code,yr) in enumerate(zip(p.dataset,p.Year))}
+    for i,(code,yr) in enumerate(zip(p.dataset,p.Year)):
+        j=indices.get((code,yr-1))
+        if j is not None:
+            cross=np.outer(scores[i],scores[j]);meat+=.5*(cross+cross.T)
+    inverse=np.linalg.inv(X.T@X)
+    return len(p)/(len(p)-X.shape[1])*inverse@meat@inverse
+
+
+def history_network_tables(data,s):
+    x=analysis_rates(data,s);x=x[x.Country.isin(s['countries']) & x.Cause.eq(s['cause'])]
+    c=within_collection_changes(x);countries=sorted(set(s['countries']));A,_=weight_matrix(countries)
+    lag=int(s['lag']);rows=[];fail=[];oos=[]
+    if lag not in (1,2,3):raise ValueError('Lag must be 1â€“3 years.')
+    for i,j in zip(*np.where(A>0)):
+        src,dst=countries[i],countries[j];p=_lagged_growth_panel(c,src,dst,lag);X=_network_design(p,lag);Y=p.Outcome.to_numpy(float)
+        coverage=p.dataset.value_counts();old=int(coverage.get(HISTORICAL_COLLECTION,0));new=int(coverage.get(MODERN_COLLECTION,0))
+        base={'Source':src,'Target':dst,'HistoricalRows':old,'ModernRows':new}
+        if min(old,new)<4 or len(p)-X.shape[1]<8 or np.linalg.matrix_rank(X)<X.shape[1]:
+            fail.append(base|{'Reason':'Needs four aligned rows per collection, eight residual degrees of freedom and full rank.'});continue
+        beta=np.linalg.lstsq(X,Y,rcond=None)[0];res=Y-X@beta
+        V=_within_era_hac(X,res,p)[-lag:,-lag:];b=beta[-lag:]
+        if np.linalg.matrix_rank(V)<lag or np.linalg.eigvalsh(V).min()<=0:
+            fail.append(base|{'Reason':'Singular lag covariance.'});continue
+        F=float(b@np.linalg.solve(V,b)/lag);pvalue=float(f_distribution.sf(F,lag,len(p)-X.shape[1]))
+        rows.append(base|{'NeighbourLag1':b[0],'F':F,'p':pvalue,'ResidualDF':len(p)-X.shape[1]})
+        # One-step prediction of annual growth at each eligible recent origin.
+        for k in np.flatnonzero(p.dataset.eq(MODERN_COLLECTION)):
+            train=p.Year.lt(p.Year.iloc[k]).to_numpy();X0=X[train];Y0=Y[train]
+            if train.sum()-X.shape[1]<8 or p.loc[train,'dataset'].nunique()!=2 or np.linalg.matrix_rank(X0)<X0.shape[1]:continue
+            own=float(X[k,:-lag]@np.linalg.lstsq(X0[:,:-lag],Y0,rcond=None)[0]);joint=float(X[k]@np.linalg.lstsq(X0,Y0,rcond=None)[0])
+            oos.append({'Source':src,'Target':dst,'Year':int(p.Year.iloc[k]),'ObservedGrowth':Y[k],
+                        'SelfOnly':own,'WithNeighbour':joint,'SelfAbsoluteError':abs(Y[k]-own),'JointAbsoluteError':abs(Y[k]-joint)})
+    pred=pd.DataFrame(oos,columns=['Source','Target','Year','ObservedGrowth','SelfOnly','WithNeighbour','SelfAbsoluteError','JointAbsoluteError'])
+    tests=adjust_pvalues(pd.DataFrame(rows,columns=['Source','Target','HistoricalRows','ModernRows','NeighbourLag1','F','p','ResidualDF']),output='q_BY',method='fdr_by')
+    scores=pred.groupby(['Source','Target']).agg(HeldOutYears=('Year','size'),SelfMAE=('SelfAbsoluteError','mean'),NeighbourMAE=('JointAbsoluteError','mean')).reset_index()
+    return {'tests':tests,'excluded':pd.DataFrame(fail,columns=['Source','Target','HistoricalRows','ModernRows','Reason']),
+            'forecast_checks':scores,'held_out_predictions':pred}
+
+
+
 def _execute_saved_operation(kind,settings,inputs):
+    new_analyses={'history_temporal':history_temporal_tables,'history_forecast':history_forecast_tables,
+                  'history_comparison':history_comparison_tables,'history_spatial':history_spatial_tables,
+                  'history_network':history_network_tables}
+    if kind in new_analyses:return new_analyses[kind](inputs['mortality'],settings)
+    if kind=='context_screen':return context_screen_tables(inputs['mortality'],inputs['indicators'],settings)
+    if kind=='spatial_years':return spatial_year_tables(inputs['mortality'],settings)
     if kind=='mortality_panel':return mortality_panel(inputs['mortality'],settings)
+    if kind=='mortality_coverage':return mortality_coverage_tables(inputs['mortality'],settings)
     if kind=='forecast_benchmark':return rolling_benchmark(inputs['mortality'],settings)
     if kind=='dispersion_sensitivity':return dispersion_sensitivities(inputs['mortality'],settings,inputs.get('population'))
     if kind=='gdp_sensitivity':return gdp_sensitivity(inputs['mortality'],inputs['gdp'],settings)
@@ -1416,13 +1896,256 @@ def _execute_saved_operation(kind,settings,inputs):
         data=inputs['trajectories'].set_index('Country');data.columns=data.columns.astype(int)
         data=data.apply(pd.to_numeric,errors='coerce')
         memberships,scores,info=cluster_trajectories(data,settings['representation'],stability_runs=100)
-        return {'clusters':memberships,'silhouettes':scores}
+        return {'clusters':memberships,'silhouettes':scores,'summary':cluster_summary(info)}
     if kind=='network':
         data=inputs['network_panel'].set_index('Year');data.index=data.index.astype(int)
         data=data.apply(pd.to_numeric,errors='coerce')
         tests,excluded,diag=predictive_network(data,settings['lag'])
         return {'tests':tests,'excluded':excluded,'diagnostics':diag}
     raise ValueError(f'Unknown exported operation {kind}')
+
+ARCHIVE_INPUTS = {
+    'mortality_panel': {'mortality':'Country Cause Year Rate Flag'},
+    'mortality_coverage': {'mortality':'Country Cause Sex Age Year Rate Flag'},
+    'forecast_benchmark': {'mortality':'Country Cause Year Rate Flag'},
+    'dispersion_sensitivity': {'mortality':'Country Year Rate Flag','population?':'Country Year Population'},
+    'gdp_sensitivity': {'mortality':'Country Cause Year Rate Flag','gdp':'Country Year|GDP per capita'},
+    'moran_panel': {'mortality':'Country Cause Year Rate'},
+    'temporal': {'series':'Year Rate'}, 'forecast': {'series':'Year Rate'},
+    'comparison': {'cause_A':'Year Rate','cause_B':'Year Rate'},
+    'benchmark': {'mortality':'Country Cause Sex Age Year Rate'},
+    'dispersion': {'mortality':'Country Year Rate','population?':'Country Year Population'},
+    'regression': {'panel':'Country Year Mortality'}, 'spatial': {'spatial_values':'Country Rate'},
+    'clustering': {'trajectories':'Country'}, 'network': {'network_panel':'Year'},
+    **{name:{'mortality':'dataset Country Cause Year Rate Flag'} for name in (
+        'history_temporal','history_forecast','history_comparison','history_spatial','history_network','spatial_years')},
+    'context_screen': {'mortality':'dataset Country Cause Year Rate Flag','indicators':'Country Year Indicator IndicatorValue IndicatorFlag'},
+}
+
+
+def _bounded_manifest(archive):
+    entries=archive.infolist()
+    if len(entries)>5000 or len({i.filename for i in entries})!=len(entries):
+        raise ValueError('Archive contains too many or duplicate entries.')
+    info=archive.getinfo('manifest.json')
+    if info.file_size>4*1024*1024:raise ValueError('Archive manifest exceeds 4 MB.')
+    manifest=json.loads(archive.read(info))
+    if not isinstance(manifest,dict):raise ValueError('Invalid archive manifest.')
+    return manifest
+
+
+class CapturedEurostat:
+    """Read checked, user-supplied Eurostat responses, independently of saved outputs."""
+    def __init__(self, content):
+        self.responses={}
+        self.identity=sha256(content)
+        total=0
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            manifest=_bounded_manifest(archive)
+            records=manifest.get('source_snapshots')
+            if not isinstance(records,list) or not 1<=len(records)<=256:
+                raise ValueError('The archive must contain between 1 and 256 Eurostat responses.')
+            for record in records:
+                if not isinstance(record,dict):raise ValueError('Invalid source record.')
+                code=record.get('dataset','')
+                digest=record.get('sha256','')
+                if not isinstance(code,str) or not re.fullmatch(r'[a-z0-9_]+',code):
+                    raise ValueError('Invalid source dataset name.')
+                if not isinstance(digest,str) or not re.fullmatch(r'[0-9a-f]{64}',digest):
+                    raise ValueError('Invalid source checksum.')
+                name='snapshots/'+code+'_'+digest+'.json'
+                if record.get('archive_file')!=name:raise ValueError('Unexpected source path.')
+                filters=record.get('filters')
+                if not isinstance(filters,dict) or any(not isinstance(k,str) for k in filters):
+                    raise ValueError('Invalid source filters.')
+                for filt in filters.values():
+                    if isinstance(filt,list):values=filt
+                    else:values=[filt]
+                    if not values or len(values)>300 or any(type(v) not in (str,int) for v in values):
+                        raise ValueError('Invalid source filter values.')
+                info=archive.getinfo(name)
+                total+=info.file_size
+                if info.file_size>8*1024*1024 or total>32*1024*1024:
+                    raise ValueError('The captured Eurostat responses exceed the supported size.')
+                raw=archive.read(info)
+                if sha256(raw)!=digest:raise ValueError('A Eurostat response did not match its checksum.')
+                payload=json.loads(raw)
+                extension=payload.get('extension',{}) if isinstance(payload,dict) else {}
+                if (not isinstance(extension,dict) or not isinstance(extension.get('id'),str)
+                        or payload.get('source')!='ESTAT' or extension['id'].lower()!=code):
+                    raise ValueError('The archive does not contain the declared Eurostat response.')
+                kept={k:record[k] for k in ('dataset','sha256','retrieved_utc','source_updated') if k in record}
+                kept.update(filters=filters,snapshot_file=code+'_'+digest+'.json',url=query_url(code,filters))
+                self.responses.setdefault(code,[]).append((raw,kept))
+        dates=sorted({m.get('retrieved_utc','')[:10] for group in self.responses.values() for _,m in group if isinstance(m.get('retrieved_utc'),str)})
+        self.dates=', '.join(dates)
+
+    def response(self, dataset, filters):
+        def as_set(v):return set(map(str,v if isinstance(v,(tuple,list)) else [v]))
+        def covers(s):
+            for k,v in filters.items():
+                if k not in ('sinceTimePeriod','untilTimePeriod') and k in s and not as_set(v)<=as_set(s[k]):
+                    return False
+            if 'sinceTimePeriod' in s and ('sinceTimePeriod' not in filters or int(filters['sinceTimePeriod'])<int(s['sinceTimePeriod'])):
+                return False
+            if 'untilTimePeriod' in s and ('untilTimePeriod' not in filters or int(filters['untilTimePeriod'])>int(s['untilTimePeriod'])):
+                return False
+            return all(k in filters or k=='geo' for k in s)
+        candidates=[(raw,m) for raw,m in self.responses.get(dataset,[]) if covers(m['filters'])]
+        if not candidates:
+            raise NoEurostatObservations(f'This archive does not cover the requested {dataset} data.')
+        # Prefer a matching narrower set of filters, then the most recent captured response.
+        return max(candidates,key=lambda item:(sum(k in item[1]['filters'] and as_set(v)==as_set(item[1]['filters'][k])
+            for k,v in filters.items()),str(item[1].get('retrieved_utc','')), item[1]['sha256']))
+
+    def causes(self,sources):
+        return {cause for code in sources for _,m in self.responses.get(code,[])
+                for cause in ([m['filters']['icd10']] if isinstance(m['filters'].get('icd10'),str)
+                              else m['filters'].get('icd10',[]))}
+
+
+PREVIOUS_ANALYSIS_RELEASES={
+    '4.9.0':'e23a196e261f18cb5dffef8e6f25a964ff8c0369640592ef01e8b41d24c4482c'
+}
+
+
+def open_archive_manifest(archive):
+    """Read saved operation settings; never load stored results as calculation inputs."""
+    manifest=_bounded_manifest(archive)
+    own=Path(__file__).resolve()
+    version=manifest.get('software_version')
+    expected=sha256(own.read_bytes()) if version==__version__ else PREVIOUS_ANALYSIS_RELEASES.get(version)
+    source_shas=manifest.get('source_sha256')
+    if not expected or not isinstance(source_shas,dict) or source_shas.get(own.name)!=expected:
+        raise ValueError('This release cannot rerun the saved settings. Use the archiveâ€™s source responses with the normal dashboard filters.')
+    operations=manifest.get('operations')
+    if not isinstance(operations,list) or not 1<=len(operations)<=500:
+        raise ValueError('Archive must contain 1 to 500 saved analyses.')
+    for op in operations:
+        if not isinstance(op,dict) or op.get('kind') not in ARCHIVE_INPUTS or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',str(op.get('id',''))):
+            raise ValueError('The archive contains an unrecognised analysis.')
+        _check_archive_settings(op.get('settings'))
+    return operations
+
+
+def _check_archive_settings(settings):
+    if not isinstance(settings,dict):raise ValueError('Missing analysis settings.')
+    years=settings.get('years')
+    if not isinstance(years,list) or len(years)!=2 or any(type(y)!=int or not 1900<=y<=2200 for y in years) or not 0<=years[1]-years[0]<=150:
+        raise ValueError('Invalid analysis years.')
+    for key,limit in {'bootstrap_repetitions':10000,'permutations':9999,'horizon':3,'lag':3}.items():
+        if key in settings and (type(settings[key])!=int or not 1<=settings[key]<=limit):raise ValueError(f'Invalid {key}.')
+    def check_items(key,allowed,limit):
+        items=settings.get(key,[])
+        if not isinstance(items,list) or len(items)>limit or any(not isinstance(v,str) or v not in allowed for v in items):
+            raise ValueError(f'Invalid {key}.')
+    national={a.alpha_2 for a in pycountry.countries}|set(EU27)|{'UK','XK'}
+    for key,allowed,limit in [('causes',CAUSES,4),('indicators',FACTOR_SPECS,10),('predictors',FACTOR_SPECS,10),
+                              ('log_predictors',FACTOR_SPECS,10),('countries',national,64)]:
+        check_items(key,allowed,limit)
+    for key in ('map_years','snapshot_years'):
+        v=settings.get(key,[])
+        if not isinstance(v,list) or len(v)>6 or any(type(y)!=int or not years[0]<=y<=years[1] for y in v):raise ValueError(f'Invalid {key}.')
+    periods=settings.get('periods',[])
+    if not isinstance(periods,list) or len(periods)>24 or any(not isinstance(p,list) or len(p)!=2 or
+            any(type(y)!=int or not 1900<=y<=2200 for y in p) or not 0<=p[1]-p[0]<=150 for p in periods):
+        raise ValueError('Invalid sensitivity periods.')
+
+
+def read_archive_inputs(archive,op,validate_for_browser=False):
+    """Decode checked inputs only. Output CSVs are never used as model inputs."""
+    inputs={}; settings=op['settings']; items=op['inputs']; kind=op['kind']
+    if validate_for_browser:
+        _check_archive_settings(settings)
+        spec=ARCHIVE_INPUTS[kind];required={k for k in spec if not k.endswith('?')};allowed={k.rstrip('?') for k in spec}
+        if not isinstance(items,dict) or not required<=set(items)<=allowed:raise ValueError('Inputs do not match the saved analysis type.')
+    for label,item in items.items():
+        if validate_for_browser and item['file']!=f"inputs/{op['id']}/{label}.csv":raise ValueError('Unexpected input path.')
+        info=archive.getinfo(item['file'])
+        if validate_for_browser and info.file_size>8*1024*1024:raise ValueError('Input table exceeds 8 MB.')
+        raw=archive.read(info)
+        if sha256(raw)!=item['sha256']:raise ValueError('Input checksum mismatch.')
+        data=pd.read_csv(io.BytesIO(raw),keep_default_na=False,float_precision='round_trip')
+        if validate_for_browser:
+            fields=spec.get(label,spec.get(label+'?')).split('|');cols=set(fields[0].split())|set(fields[1:])
+            if len(data)>18000 or len(data.columns)>160 or not cols<=set(data.columns) or len(data)!=item['rows']:
+                raise ValueError('Input table size or columns do not match the analysis.')
+            if 'Year' in data:
+                y=pd.to_numeric(data.Year,errors='coerce')
+                if y.isna().any() or not y.between(1900,2200).all() or not y.mod(1).eq(0).all():raise ValueError('Invalid years in input.')
+                data['Year']=y.astype(int)
+            if 'Country' in data and data.Country.nunique()>64:raise ValueError('Too many input countries.')
+            if kind=='forecast_benchmark' and (settings['years'][1]-settings['years'][0]>24 or len(data)>4*27*25):
+                raise ValueError('Forecast comparison archive exceeds the supported size.')
+        numeric={'Rate','Mortality','Population','GDP per capita','IndicatorValue',*settings.get('predictors',[])}
+        for col in set(data.columns)&numeric:data[col]=pd.to_numeric(data[col],errors='coerce')
+        inputs[label]=data
+    return inputs
+
+
+def choose_data_source():
+    with st.sidebar.expander('Data source'):
+        mode=st.radio('Source',['Live Eurostat','Eurostat responses from an archive'],key='data_source_mode')
+        if mode=='Live Eurostat':
+            st.session_state.pop('captured_responses',None)
+            return None,None
+        st.caption('Upload an analysis archive to use its original Eurostat responses with the normal dashboard controls.')
+        upload=st.file_uploader('Analysis archive (.zip)',type=['zip'],key='open_analysis_zip',max_upload_size=30)
+        if upload is None:
+            st.session_state.pop('captured_responses',None)
+            st.info('Choose an archive to enable the filters.')
+            return None,None
+        try:
+            raw=upload.getvalue()
+            digest=sha256(raw)
+            if st.session_state.get('captured_responses',(None,None))[0]!=digest:
+                st.session_state.pop('captured_responses',None)
+                st.session_state.captured_responses=(digest,CapturedEurostat(raw))
+            source=st.session_state.captured_responses[1]
+            st.caption(f'Captured on {source.dates or "an unrecorded date"}. Only data in the archive are available in this mode.')
+            return source,raw
+        except (ValueError,TypeError,KeyError,OverflowError,RuntimeError,OSError,zipfile.BadZipFile) as exc:
+            st.error(f'Could not read the original Eurostat responses: {str(exc)[:220]}')
+            return None,None
+
+
+def render_archive_inputs(raw,selected_source):
+    if raw is None:return
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        if not _bounded_manifest(archive).get('operations'):return
+    with st.expander('Saved analysis settings'):
+        st.caption('You can also rerun a saved selection from this archive. The dashboard calculates the table again from its saved inputs.')
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                operations=open_archive_manifest(archive)
+                def describe(i):
+                    op=operations[i];s=op.get('settings',{});years=s.get('years',[])
+                    label=op['kind'].replace('_',' ').capitalize()
+                    if op['kind']=='context_screen':label+=' ('+str(s.get('context_mode','')).replace('_',' ')+')'
+                    if s.get('exclude_flags'):label+=' Â· omit b/d/u'
+                    return f"{i+1}. {label} Â· {CAUSES.get(s.get('cause'),s.get('cause',''))} Â· {'â€“'.join(map(str,years))}"
+                idx=st.selectbox('Saved settings',list(range(len(operations))),format_func=describe,key='open_analysis_index')
+                op=operations[idx];s=op['settings'];_check_archive_settings(s)
+                if op['kind']=='history_forecast':
+                    s=s|{'compare_damped':st.checkbox('Compare with modern damped drift on matched targets',key='archive_compare_damped')}
+                with st.expander('Selected settings'):
+                    st.json({k:v for k,v in s.items() if k not in {'mortality_sha256','source_sha256'}})
+                key=(selected_source,idx,s.get('compare_damped',False))
+                if st.button('Calculate using these inputs',key='open_analysis_run'):
+                    with st.spinner('Calculating from the captured observationsâ€¦'):
+                        tables=_execute_saved_operation(op['kind'],s,read_archive_inputs(archive,op,validate_for_browser=True))
+                        st.session_state['open_analysis_result']=(key,tables)
+            cached=st.session_state.get('open_analysis_result')
+            if cached is not None and cached[0]==key:
+                st.success('Calculated from the captured input data.')
+                tables=cached[1]
+                table=st.selectbox('Calculated table',list(tables),format_func=lambda x:x.replace('_',' ').capitalize(),key='open_analysis_table')
+                frame=tables[table];st.dataframe(frame,width='stretch',hide_index=True)
+                st.download_button('Download calculated CSV',frame.to_csv(index=False).encode(),file_name=f'{table}.csv',mime='text/csv',key='open_analysis_csv')
+        except (ValueError,TypeError,KeyError,IndexError,OverflowError,RuntimeError,OSError,zipfile.BadZipFile,np.linalg.LinAlgError) as exc:
+            st.warning(f'Could not open or calculate the selected analysis: {str(exc)[:250]}')
+
+
 
 def _reproduce_cli():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--archive',type=Path,required=True);p.add_argument('--output',type=Path,default=Path('reproduced_export'))
@@ -1435,18 +2158,10 @@ def _reproduce_cli():
                 raise ValueError(f'Source differs from captured release: {name}; run using the source included in this archive')
         results=[]
         for op in manifest['operations']:
-            inputs={}
-            for label,item in op['inputs'].items():
-                raw=archive.read(item['file'])
-                if hashlib.sha256(raw).hexdigest()!=item['sha256']:raise ValueError('Input checksum mismatch')
-                import io
-                inputs[label]=pd.read_csv(io.BytesIO(raw),keep_default_na=False)
-                for col in inputs[label].columns:
-                    if col in ('Rate','Mortality','Population','GDP per capita') or col in op['settings'].get('predictors',[]):
-                        inputs[label][col]=pd.to_numeric(inputs[label][col],errors='coerce')
+            inputs=read_archive_inputs(archive,op)
             actual=_execute_saved_operation(op['kind'],op['settings'],inputs)
+            if set(actual)!=set(op['tables']):raise AssertionError(f"Reproduced table names differ: {op['kind']}")
             for label,table in actual.items():
-                if label not in op['tables']:continue
                 item=op['tables'][label];raw=archive.read(item['file'])
                 if hashlib.sha256(raw).hexdigest()!=item['sha256']:raise ValueError('Output checksum mismatch')
                 import io
@@ -1580,12 +2295,12 @@ CACHE=Path(os.environ.get('EUROHEALTH_CACHE',str(
     Path(tempfile.gettempdir())/f'european_public_health_{_cache_user}_live')))
 
 
-def live_inputs(cause,source,refresh_after=0.0):
-    return load_mortality([cause],CACHE,source=source,refresh_after=refresh_after)
+def live_inputs(cause,source,refresh_after=0.0,archive=None):
+    return load_mortality([cause],CACHE,source=source,refresh_after=refresh_after,archive=archive)
 
 
-def contextual_input(name,sex,countries,refresh_after=0.0):
-    return load_factor(name,CACHE,sex=sex,geographies=countries,refresh_after=refresh_after)
+def contextual_input(name,sex,countries,refresh_after=0.0,archive=None):
+    return load_factor(name,CACHE,sex=sex,geographies=countries,refresh_after=refresh_after,archive=archive)
 
 def remember(kind,settings,tables,inputs,metadata=None):
     key=operation_id(kind,settings,[m['sha256'] for m in st.session_state.snapshots.values()])
@@ -1594,12 +2309,12 @@ def remember(kind,settings,tables,inputs,metadata=None):
     st.session_state.pop('export_archive',None)
     return key
 
-def load_mortality_view(cause,choice,refresh_after=0.0):
+def load_mortality_view(cause,choice,refresh_after=0.0,archive=None):
     """Keep the two collections and their source manifests distinct."""
     parts=[];sources=[];issues=[]
     for code in MORTALITY_SOURCES[choice]:
         try:
-            frame,meta=live_inputs(cause,code,refresh_after)
+            frame,meta=live_inputs(cause,code,refresh_after,archive)
         except NoEurostatObservations:
             issues.append(('empty',code,'No rates for this cause in the selected countries.'))
         except (OSError, RuntimeError, ValueError) as exc:
@@ -1619,11 +2334,11 @@ from plotly.subplots import make_subplots
 
 
 WORKSPACES = (
-    '📈 Temporal Trends',
-    '⚖️ Cross-Cause Comparison',
-    '🔬 Health & Macro Factors',
-    '🗺️ Spatial & Clusters',
-    '🔗 Temporal Network',
+    'ðŸ“ˆ Temporal Trends',
+    'âš–ï¸ Cross-Cause Comparison',
+    'ðŸ”¬ Health & Macro Factors',
+    'ðŸ—ºï¸ Spatial & Clusters',
+    'ðŸ”— Temporal Network',
 )
 INK = '#28599d'
 TEAL = '#117d77'
@@ -1680,22 +2395,26 @@ class DashboardSelection:
     combined: bool
     spans_change: bool
     refresh_after: float
+    archive: CapturedEurostat|None
 
     @property
     def title(self):
         cause=self.settings['cause'];country=self.settings['country']
-        return f"{CAUSES.get(cause,cause)} · {self.country_labels.get(country,country)}"
+        return f"{CAUSES.get(cause,cause)} Â· {self.country_labels.get(country,country)}"
 
     @property
     def subtitle(self):
         s=self.settings
-        return f"{AGE_LABELS[s['age']]} · {SEX_LABELS[s['sex']]} · {self.view_years[0]}–{self.view_years[1]}"
+        return f"{AGE_LABELS[s['age']]} Â· {SEX_LABELS[s['sex']]} Â· {self.view_years[0]}â€“{self.view_years[1]}"
 
 
 def plot_chart(fig, *, height=350, alt, key=None):
     fig.update_layout(height=height,margin=dict(l=16,r=16,t=30,b=40),
                       legend=dict(orientation='h',yanchor='bottom',y=1.02,x=0,title_text=''),
                       font=dict(size=13))
+    if key=='eu_cause_trends':
+        # Put the shared legend below the facets, clear of the cause headings.
+        fig.update_layout(margin=dict(t=45,b=75),legend=dict(yanchor='top',y=-.18))
     fig.update_xaxes(gridcolor='rgba(95,122,147,.15)',zeroline=False)
     fig.update_yaxes(gridcolor='rgba(95,122,147,.15)',zeroline=False)
     st.plotly_chart(fig,width='stretch',key=key,alt=alt,
@@ -1731,35 +2450,45 @@ def show_analysis_exports():
         with st.expander('Saved analyses'):
             names={'temporal':'Trend segments','forecast':'Forecast','benchmark':'EU comparison',
                    'comparison':'Cause comparison','regression':'Contextual factors','dispersion':'Geographical dispersion',
-                   'mortality_panel':'EU and national trends','forecast_benchmark':'Rolling forecast comparison',
-                   'dispersion_sensitivity':'Dispersion sensitivities','gdp_sensitivity':'GDP associations','moran_panel':'Moran’s I across causes',
-                   'spatial':'Spatial association','clustering':'Trajectory groups','network':'Temporal network'}
+                   'mortality_panel':'EU and national trends','mortality_coverage':'Mortality source coverage',
+                   'forecast_benchmark':'Rolling forecast comparison',
+                   'dispersion_sensitivity':'Dispersion sensitivities','gdp_sensitivity':'GDP associations','moran_panel':'Moranâ€™s I across causes',
+                   'spatial':'Spatial association','clustering':'Trajectory groups','network':'Temporal network',
+                   'history_temporal':'Within-collection trend segments','history_forecast':'Longer-history forecast comparison',
+                   'history_comparison':'Two-collection cause comparison','context_screen':'Indicator comparison',
+                   'history_spatial':'Two-collection spatial analysis','history_network':'Two-collection lagged prediction',
+                   'spatial_years':'Geographical association across years'}
             rows=[]
             for item in analyses.values():
                 s=item['settings'];first,last=s['years']
                 rows.append({'Analysis':names.get(item['kind'],item['kind']),
                              'Country':s['country'],'Cause':CAUSES.get(s['cause'],s['cause']),
                              'Age':AGE_LABELS[s['age']],'Sex':SEX_LABELS[s['sex']],
-                             'Collection':COLLECTION_LABELS[s['dataset']],'Years':f'{first}–{last}'})
+                             'Collection':COLLECTION_LABELS[s['dataset']],'Years':f'{first}â€“{last}'})
             st.dataframe(pd.DataFrame(rows),hide_index=True,width='stretch')
 
 
-def read_selection():
+def read_selection(archive=None):
     with st.sidebar:
-        st.header('📊 Global data filters',anchor=False)
+        st.header('ðŸ“Š Global data filters',anchor=False)
         mode=st.selectbox('Mortality data',list(MORTALITY_SOURCES),
-                          help='Choose a Eurostat collection or view both on one timeline.')
+                          help='Choose one Eurostat collection or use both in calculations that account for the 2011 reporting break.')
         combined=mode==COMBINED_COLLECTIONS
         country_slot=st.empty()
-        available=list(CAUSES)
-        cause=st.selectbox('Cause of death',available,index=available.index('I60-I69'),format_func=lambda c:CAUSES.get(c,c))
-        if st.button('Refresh Eurostat data',width='stretch',
+        captured_causes=archive.causes(MORTALITY_SOURCES[mode]) if archive is not None else set(CAUSES)
+        available=[c for c in CAUSES if c in captured_causes]
+        if not available:
+            st.info('This archive has no mortality responses for this collection.')
+            return None,[]
+        cause=st.selectbox('Cause of death',available,index=available.index('I60-I69') if 'I60-I69' in available else 0,
+                           format_func=lambda c:CAUSES.get(c,c))
+        if archive is None and st.button('Refresh Eurostat data',width='stretch',
                      help='Fetch the latest available Eurostat data for this selection and the analyses you run next.'):
             st.session_state.refresh_after=time.time()
     refresh_after=st.session_state.get('refresh_after',0.0)
     try:
-        with st.spinner('Loading Eurostat mortality rates…'):
-            data,sources,issues=load_mortality_view(cause,mode,refresh_after)
+        with st.spinner('Loading Eurostat mortality ratesâ€¦'):
+            data,sources,issues=load_mortality_view(cause,mode,refresh_after,archive)
     except Exception as exc:
         st.error(f'The selected mortality data could not be loaded: {exc}')
         return None,[]
@@ -1799,29 +2528,30 @@ def read_selection():
         return None,sources
     spans_change=combined and view_years[0]<COLLECTION_BREAK<=view_years[1]
     with st.sidebar:
-        if len(available_periods)>1:
-            source=st.radio('Calculate using',[MODERN_COLLECTION,HISTORICAL_COLLECTION],
-                            format_func=COLLECTION_LABELS.get,horizontal=True,key='calculation_collection',
-                            persist_state='page',help='Both collections stay on the chart. Calculations use the chosen collection.')
-        else:
-            source=next(iter(available_periods))
-        years=available_periods[source]
+        choices=[c for c in (MODERN_COLLECTION,HISTORICAL_COLLECTION) if c in available_periods]
+        if spans_change and view_cohort.loc[view_cohort.Rate.notna(),'dataset'].nunique()==2:
+            choices.insert(0,BOTH_ANALYSIS)
+        source=st.radio('Calculate using',choices,format_func=COLLECTION_LABELS.get,key='calculation_collection',
+                        persist_state='page',help='Both-collection analyses use within-collection comparisons and lags.') if len(choices)>1 else choices[0]
+        years=view_years if source==BOTH_ANALYSIS else available_periods[source]
         if combined or years!=view_years:
-            st.caption(f'{COLLECTION_LABELS[source]} calculation period: {years[0]}–{years[1]}')
+            st.caption(f'{COLLECTION_LABELS[source]} Â· {years[0]}â€“{years[1]}')
     if spans_change:
         for code in (HISTORICAL_COLLECTION,MODERN_COLLECTION):
             if code not in available_periods and code not in {item[1] for item in issues}:
                 st.caption(f'{COLLECTION_LABELS[code]} collection: no rates for this selection.')
-    source_meta=next(m for m in sources if m['dataset']==source)
+    source_hashes={m['dataset']:m['sha256'] for m in sources}
     settings={'country':country,'cause':cause,'age':age,'sex':sex,'years':list(years),'dataset':source,
-              'mortality_sha256':source_meta['sha256']}
+              'mortality_sha256':source_hashes if source==BOTH_ANALYSIS else source_hashes[source],
+              'data_source':'captured' if archive is not None else 'live'}
     if combined:settings['display_years']=list(view_years)
+    if archive is not None:settings['source_archive']=archive.identity
     if country=='EU27_2020' and source==MODERN_COLLECTION and years[0]<2013:
         st.caption('Inspect early official EU aggregate values with care. Official reference comparisons use 2013 onward.')
-    cohort=view_cohort[(view_cohort.dataset==source)&view_cohort.Year.between(*years)]
-    selected=observed[(observed.dataset==source)&observed.Year.between(*years)]
+    cohort=view_cohort if source==BOTH_ANALYSIS else view_cohort[(view_cohort.dataset==source)&view_cohort.Year.between(*years)]
+    selected=observed if source==BOTH_ANALYSIS else observed[(observed.dataset==source)&observed.Year.between(*years)]
     return DashboardSelection(data,cohort,observed,selected,settings,available,country_labels,view_years,
-                              combined,spans_change,refresh_after),sources
+                              combined,spans_change,refresh_after,archive),sources
 
 
 def show_timeline(selection, trend):
@@ -1843,12 +2573,12 @@ def show_timeline(selection, trend):
         fig=go.Figure()
         for (code,sex),g in observed.groupby(['dataset','Sex'],sort=False):
             title=COLLECTION_LABELS[code] if selection.combined else 'Observed'
-            if comparison:title+=f' · {SEX_LABELS[sex]}'
+            if comparison:title+=f' Â· {SEX_LABELS[sex]}'
             colour=(AMBER if code==HISTORICAL_COLLECTION else INK) if sex==s['sex'] else {'T':TEAL,'F':PURPLE,'M':TEAL}[sex]
             hover=g[['Flag','OriginalCause','dataset']].to_numpy()
             fig.add_trace(go.Scatter(x=g.Year,y=g.Rate,name=title,mode='lines+markers',connectgaps=False,
                 line=dict(color=colour,width=2.6,dash='solid' if sex==s['sex'] else 'dot'),marker=dict(size=6),
-                customdata=hover,hovertemplate='%{y:.2f}<br>Flag: %{customdata[0]}<br>%{customdata[2]} · %{customdata[1]}'))
+                customdata=hover,hovertemplate='%{y:.2f}<br>Flag: %{customdata[0]}<br>%{customdata[2]} Â· %{customdata[1]}'))
         if trend:
             model_data=trend['inputs']['series']
             for i,row in enumerate(trend['tables']['segments'].itertuples(index=False),1):
@@ -1867,7 +2597,7 @@ def show_timeline(selection, trend):
         fig.update_layout(xaxis_title='Year',yaxis_title=RATE_LABEL,hovermode='x unified')
         plot_chart(fig,height=370,alt='Observed mortality rates by year and Eurostat collection',key='observed_rates')
         if selection.spans_change:
-            st.caption('Eurostat changed the age standard and some cause groupings in 2011. The chart keeps the collections separate.')
+            st.caption('Eurostat documents a change in reporting in 2011. The chart shows each collection on a separate line.')
         with st.expander('Values and source flags'):
             if observed.Flag.astype(str).str.len().gt(0).any():
                 st.caption('Eurostat flags mark observations that require care when interpreting trends.')
@@ -1899,7 +2629,7 @@ def show_forecast(observed,tables,primary):
     if not close_up:
         band=prediction[prediction.Model.eq(primary)].sort_values('Year')
         if band.empty:band=frames[0].sort_values('Year')
-        band_name=f'95% interval · {band.Model.iloc[0]}'
+        band_name=f'95% interval Â· {band.Model.iloc[0]}'
         if len(band)==1:
             fig.add_trace(go.Scatter(x=[int(band.Year.iloc[0])]*2,y=[band.Lower.iloc[0],band.Upper.iloc[0]],
                 mode='lines',name=band_name,line=dict(color='rgba(17,125,119,.35)',width=5),hoverinfo='skip'))
@@ -1932,25 +2662,33 @@ def show_forecast(observed,tables,primary):
 
 
 def panel_causes(selection,key):
+    def label(c):
+        return {'F01_F03':'Dementia (F01/F03)','A15-A19_B90':'Tuberculosis (A15â€“A19 and B90)'}.get(c,CAUSES.get(c,c))
     return st.multiselect('Causes',selection.available,default=[selection.settings['cause']],
-        format_func=lambda c:CAUSES.get(c,c),key=key,max_selections=4,persist_state='page')
+        format_func=label,key=key,max_selections=4,persist_state='page')
 
 
-def panel_inputs(selection,causes):
+def panel_inputs(selection,causes,*,all_strata=False):
     s=selection.settings;data=[]
     if not causes:raise ValueError('Select at least one cause.')
     for cause in causes:
-        try:
-            if cause==s['cause']:
-                frame=selection.data[selection.data.dataset.eq(s['dataset'])]
-            else:
-                frame,meta=live_inputs(cause,s['dataset'],selection.refresh_after)
-                st.session_state.snapshots[meta['sha256']]=meta
-        except (OSError,RuntimeError,ValueError) as exc:
-            raise ValueError(f'{CAUSES.get(cause,cause)}: {exc}') from exc
-        population=frame[frame.Cause.eq(cause)&frame.Sex.eq(s['sex'])&frame.Age.eq(s['age'])]
-        if not population.Rate.notna().any():raise ValueError(f'No matching rates for {CAUSES.get(cause,cause)}.')
-        data.append(population)
+        found=[]
+        for code in ERA_CODES if s['dataset']==BOTH_ANALYSIS else [s['dataset']]:
+            try:
+                if cause==s['cause']:
+                    frame=selection.data[selection.data.dataset.eq(code)]
+                else:
+                    frame,meta=live_inputs(cause,code,selection.refresh_after,selection.archive)
+                    st.session_state.snapshots[meta['sha256']]=meta
+            except NoEurostatObservations:
+                continue
+            except (OSError,RuntimeError,ValueError) as exc:
+                raise ValueError(f'{CAUSES.get(cause,cause)} ({COLLECTION_LABELS[code]}): {exc}') from exc
+            population=frame[frame.Cause.eq(cause)]
+            if not all_strata:population=population[population.Sex.eq(s['sex'])&population.Age.eq(s['age'])]
+            if population.Rate.notna().any():found.append(population)
+        if not found:raise ValueError(f'No matching rates for {CAUSES.get(cause,cause)}.')
+        data.extend(found)
     return pd.concat(data,ignore_index=True)
 
 
@@ -1962,9 +2700,28 @@ def render_mortality_panel(selection):
         can_sum={'G30','F01_F03'}.issubset(causes)
         combine=st.checkbox('Show the combined Alzheimer and F01/F03 dementia rate',disabled=not can_sum,key='combined_dementia') and can_sum
         op=s|{'causes':causes,'combine_dementia':combine}
+        with st.expander('Data coverage across ages and sexes'):
+            st.caption('Counts the selected causes and years across all recorded age and sex strata. The official aggregate and national cells are shown separately.')
+            audit=s|{'causes':causes,'all_strata':True}
+            if st.button('Count observations and source flags',disabled=not causes):
+                try:
+                    data=panel_inputs(selection,causes,all_strata=True)
+                    data=data[data.Year.between(*s['years'])&data.Country.isin((*EU27,'EU27_2020'))]
+                    remember('mortality_coverage',audit,mortality_coverage_tables(data,audit),{'mortality':data})
+                except (ValueError,RuntimeError,OSError) as exc:st.warning(str(exc))
+            checked=current_result('mortality_coverage',audit)
+            if checked:
+                tables=checked['tables']
+                if not tables['coverage'].empty:
+                    c=tables['coverage'];total=c.select_dtypes(include='number').sum().to_dict()
+                    st.dataframe(pd.concat([c,pd.DataFrame([{'Population':'Total',**total}])],ignore_index=True),
+                                 hide_index=True,width='stretch')
+                st.dataframe(tables['coverage_by_stratum'],hide_index=True,width='stretch')
+                if not tables['flagged_cells'].empty:
+                    st.dataframe(tables['flagged_cells'],hide_index=True,width='stretch')
         if st.button('Calculate EU and national changes',disabled=not causes):
             try:
-                with st.spinner('Loading the selected causes…'):
+                with st.spinner('Loading the selected causesâ€¦'):
                     data=panel_inputs(selection,causes)
                     data=data[data.Country.isin((*EU27,'EU27_2020'))&data.Year.between(*s['years'])]
                     tables=mortality_panel(data,op)
@@ -2016,7 +2773,7 @@ def render_forecast_benchmark(selection):
         short=s['years'][1]-s['years'][0]<8
         if short:st.caption('Select at least nine consecutive years for a one-year backtest and eleven for a three-year backtest.')
         if st.button('Run rolling forecast comparison',disabled=short or not causes):
-            meter=st.progress(0,text='Loading the selected mortality series…')
+            meter=st.progress(0,text='Loading the selected mortality seriesâ€¦')
             try:
                 data=panel_inputs(selection,causes)
                 data=data[data.Country.isin(EU27)&data.Year.between(*s['years'])]
@@ -2053,7 +2810,7 @@ def render_forecast_benchmark(selection):
                 plot_chart(fig,height=320,alt='Forecast performance by target year and horizon',key='rolling_target_year')
             st.dataframe(t['by_cause'][t['by_cause'].Sensitivity.eq(sensitivity)],hide_index=True,width='stretch')
         with st.expander('Paired comparisons and eligibility'):
-            st.caption('Country-block resampling keeps years fixed. Simultaneous bands cover the displayed cause × horizon × model family on its shared countries.')
+            st.caption('Country-block resampling keeps years fixed. Simultaneous bands cover the displayed cause Ã— horizon Ã— model family on its shared countries.')
             st.dataframe(t['paired_differences'][t['paired_differences'].Sensitivity.eq(sensitivity)],hide_index=True,width='stretch')
             st.dataframe(t['simultaneous_bands'],hide_index=True,width='stretch')
             st.dataframe(t['eligibility'],hide_index=True,width='stretch')
@@ -2113,10 +2870,10 @@ def population_weight_years(selection):
         data.dataset.eq(MODERN_COLLECTION)&data.Country.isin(EU27)&data.Rate.notna(),'Year'].unique())
 
 
-def retrieve_population_weights(years,refresh_after):
+def retrieve_population_weights(years,refresh_after,archive=None):
     try:
-        with st.spinner('Loading Eurostat population weights…'):
-            population,meta=load_population(CACHE,(years[0],years[-1]),refresh_after=refresh_after)
+        with st.spinner('Loading Eurostat population weightsâ€¦'):
+            population,meta=load_population(CACHE,(years[0],years[-1]),refresh_after=refresh_after,archive=archive)
     except (ValueError,OSError,RuntimeError):
         st.warning('Eurostat population weights are unavailable. Showing equal-country measures.')
         return None
@@ -2138,7 +2895,7 @@ def render_dispersion_sensitivity(selection):
         base=st.selectbox('Fixed population weight year',years,index=years.index(first) if first in years else 0,key='dispersion_fixed_weights') if years else first
         op=s|{'periods':[list(pair) for pair in periods],'exclude_flags':flags,'fixed_weight_year':int(base),'countries':list(EU27)}
         if st.button('Run dispersion sensitivities',disabled=first>=last):
-            pop=retrieve_population_weights(years,selection.refresh_after) if years else None
+            pop=retrieve_population_weights(years,selection.refresh_after,selection.archive) if years else None
             tables=dispersion_sensitivities(data,op,pop)
             remember('dispersion_sensitivity',op,tables,{'mortality':data}|({'population':pop} if pop is not None else {}))
         item=current_result('dispersion_sensitivity',op)
@@ -2151,7 +2908,7 @@ def render_dispersion_sensitivity(selection):
                     if len(table.loc[weighted,specs].drop_duplicates())<len(table[specs].drop_duplicates()):
                         st.caption('Population-weighted estimates require complete weights for the countries and years in each comparison.')
                 metric=st.selectbox('Measure to compare',list(table.Metric.unique()),format_func=METRIC_NAMES.get,key='sensitivity_metric')
-                sub=table[table.Metric.eq(metric)].copy();sub['Period']=sub.apply(lambda r:f"{r.StartYear}–{r.EndYear}"+(' · flags excluded' if r.ExcludedFlags else ''),axis=1)
+                sub=table[table.Metric.eq(metric)].copy();sub['Period']=sub.apply(lambda r:f"{r.StartYear}â€“{r.EndYear}"+(' Â· flags excluded' if r.ExcludedFlags else ''),axis=1)
                 fig=px.bar(sub,x='Period',y='Difference',labels={'Difference':METRIC_NAMES[metric]+' change'})
                 plot_chart(fig,height=300,alt='Dispersion changes under alternative periods and source flags',key='dispersion_sensitivity_plot')
                 st.dataframe(table,hide_index=True,width='stretch')
@@ -2161,12 +2918,13 @@ def render_dispersion_sensitivity(selection):
 def render_gdp_panel(selection):
     with st.expander('GDP associations across causes'):
         s=selection.settings;first,last=s['years'];causes=panel_causes(selection,'gdp_panel_causes')
+        st.caption('Both adjustments use the same cause family within each time period or flag specification.')
         end=st.selectbox('Additional earlier end year',[None]+list(range(first+2,last)),format_func=lambda y:'None' if y is None else str(y),key='gdp_earlier_end')
         op=s|{'causes':causes,'earlier_end':end}
         if st.button('Compare GDP associations',disabled=not causes):
             try:
                 data=panel_inputs(selection,causes)
-                gdp,meta=contextual_input('GDP per capita',s['sex'],tuple(EU27),selection.refresh_after)
+                gdp,meta=contextual_input('GDP per capita',s['sex'],tuple(EU27),selection.refresh_after,selection.archive)
                 st.session_state.snapshots[meta['sha256']]=meta
                 remember('gdp_sensitivity',op,gdp_sensitivity(data,gdp,op),{'mortality':data,'gdp':gdp})
             except (ValueError,OSError,RuntimeError) as exc:st.warning(str(exc))
@@ -2175,18 +2933,21 @@ def render_gdp_panel(selection):
             t=item['tables'];a=t['associations']
             if not a.empty:
                 a=a.assign(Outcome=a.Cause.map(lambda c:CAUSES.get(c,c)),Upper=a.CI_high-a.Coefficient,Lower=a.Coefficient-a.CI_low)
-                fig=px.scatter(a,x='Coefficient',y='Outcome',color='Specification',error_x='Upper',error_x_minus='Lower',hover_data=['p','q','n'],labels={'Coefficient':'GDP elasticity (95% interval)'})
+                fig=px.scatter(a,x='Coefficient',y='Outcome',color='Specification',error_x='Upper',error_x_minus='Lower',hover_data=['p','q','q_BY','n'],
+                               labels={'Coefficient':'GDP elasticity (95% interval)','q':'BH q','q_BY':'BY q'})
                 fig.add_vline(x=0,line_dash='dot',line_color='#72808b');plot_chart(fig,alt='GDP associations by cause and specification',key='gdp_panel_plot')
-                st.dataframe(t['associations'],hide_index=True,width='stretch')
+                st.dataframe(t['associations'],hide_index=True,width='stretch',
+                             column_config={'q':'BH q','q_BY':'BY q'})
             if not t['ineligible'].empty:st.dataframe(t['ineligible'],hide_index=True,width='stretch')
 
 
 def render_moran_panel(selection):
     with st.expander('Spatial association across causes'):
         s=selection.settings;causes=panel_causes(selection,'moran_panel_causes')
+        st.caption('Both false discovery rate adjustments use the same family of eligible causes.')
         year=st.selectbox('Map year',sorted(selection.cohort.Year.unique(),reverse=True),key='moran_panel_year')
         op=s|{'causes':causes,'map_year':int(year),'permutations':9999}
-        if st.button('Compare Moran’s I across causes',disabled=not causes):
+        if st.button('Compare Moranâ€™s I across causes',disabled=not causes):
             try:
                 data=panel_inputs(selection,causes)
                 data=data[data.Year.eq(year)&data.Country.isin(EU27)]
@@ -2196,17 +2957,20 @@ def render_moran_panel(selection):
         if item:
             t=item['tables'];table=t['associations']
             if not table.empty:
-                fig=px.bar(table.assign(Outcome=table.Cause.map(lambda c:CAUSES.get(c,c))),x='Outcome',y='Moran_I',hover_data=['p','q','n_countries'])
-                plot_chart(fig,alt='Moran’s I for each selected cause',key='moran_panel_plot')
-                st.dataframe(table,hide_index=True,width='stretch')
+                fig=px.bar(table.assign(Outcome=table.Cause.map(lambda c:CAUSES.get(c,c))),x='Outcome',y='Moran_I',
+                           hover_data=['p','q','q_BY','n_countries'],labels={'q':'BH q','q_BY':'BY q'})
+                plot_chart(fig,alt='Moranâ€™s I for each selected cause',key='moran_panel_plot')
+                st.dataframe(table,hide_index=True,width='stretch',
+                             column_config={'q':'BH q','q_BY':'BY q'})
             if not t['ineligible'].empty:st.dataframe(t['ineligible'],hide_index=True,width='stretch')
 
 
 def render_trends(selection):
+    if selection.settings['dataset']==BOTH_ANALYSIS:return render_history_trends(selection)
     s=selection.settings;selected=selection.selected
     with st.sidebar:
         st.divider()
-        st.header('🔮 Forecast settings',anchor=False)
+        st.header('ðŸ”® Forecast settings',anchor=False)
         method=st.selectbox('Forecast model',list(MODELS),key='forecast_model',persist_state='page',format_func=forecast_model_name,
                             help='Persistence repeats the most recent rate. Other models can project change based on the selected history.')
         horizon=st.slider('Forecast horizon in years',1,3,3,key='forecast_horizon',persist_state='page')
@@ -2237,8 +3001,8 @@ def render_trends(selection):
         first,last=finite.iloc[0],finite.iloc[-1]
         change=100*(last.Rate/first.Rate-1) if len(finite)>1 and first.Rate>0 else None
         a,b,c=st.columns(3)
-        a.metric(f'Observed rate · {int(last.Year)}',f'{last.Rate:.1f}',border=True,help=RATE_LABEL)
-        b.metric(f'Change · {int(first.Year)}–{int(last.Year)}',f'{change:+.1f}%' if change is not None else '—',border=True,
+        a.metric(f'Observed rate Â· {int(last.Year)}',f'{last.Rate:.1f}',border=True,help=RATE_LABEL)
+        b.metric(f'Change Â· {int(first.Year)}â€“{int(last.Year)}',f'{change:+.1f}%' if change is not None else 'â€”',border=True,
                  help='First to last observed rate within the calculation period.')
         c.metric('Years with data',f'{len(finite)} of {int(last.Year-first.Year+1)}',border=True,
                  help=f"Reporting years in the {COLLECTION_LABELS[s['dataset']].lower()} calculation period.")
@@ -2246,7 +3010,7 @@ def render_trends(selection):
     with st.container(border=True,key='forecast_panel'):
         st.subheader('Forecast',anchor=False)
         period=s['years']
-        st.caption(f"{forecast_model_name(method)} · {horizon}-year horizon · {COLLECTION_LABELS[s['dataset']]} series, {period[0]}–{period[1]}")
+        st.caption(f"{forecast_model_name(method)} Â· {horizon}-year horizon Â· {COLLECTION_LABELS[s['dataset']]} series, {period[0]}â€“{period[1]}")
         if method=='Naive':st.caption('Persistence repeats the last observed rate at every horizon. Its point forecast is flat by design.')
         if selection.spans_change and s['dataset']==HISTORICAL_COLLECTION:
             st.caption('Projections from the historical series use the historical definition.')
@@ -2257,7 +3021,7 @@ def render_trends(selection):
         if st.button('Generate forecast',type='primary'):
             try:
                 series=selected[['Year','Rate']]
-                with st.spinner('Fitting the selected forecast…'):
+                with st.spinner('Fitting the selected forecastâ€¦'):
                     tables=forecast_analysis_tables(series,op)
                 remember('forecast',op,tables,{'series':series})
             except ValueError as exc:st.warning(str(exc))
@@ -2296,7 +3060,7 @@ def render_benchmark(selection):
             a.metric('Mean country rate',f'{paired.CountryRate.mean():.1f}',border=True)
             b.metric('Mean reference rate',f'{paired.ReferenceRate.mean():.1f}',border=True)
             gap=paired.GapPercent.mean()
-            c.metric('Mean gap',f'{gap:+.1f}%' if np.isfinite(gap) else '—',border=True)
+            c.metric('Mean gap',f'{gap:+.1f}%' if np.isfinite(gap) else 'â€”',border=True)
             fig=make_subplots(rows=2,cols=1,shared_xaxes=True,vertical_spacing=.13,row_heights=[.62,.38])
             for col,label,colour,dash in [('CountryRate',country_name,INK,'solid'),('ReferenceRate',reference,TEAL,'dash')]:
                 fig.add_trace(go.Scatter(x=table.Year,y=table[col],name=label,mode='lines+markers',
@@ -2315,10 +3079,11 @@ def render_benchmark(selection):
 
 
 def render_comparison(selection):
+    if selection.settings['dataset']==BOTH_ANALYSIS:return render_history_comparison(selection)
     s=selection.settings
     with st.container(border=True,key='compare_panel'):
         st.subheader('Compare two causes of death',anchor=False)
-        st.caption(selection.title+' · '+selection.subtitle)
+        st.caption(selection.title+' Â· '+selection.subtitle)
         choices=[c for c in selection.available if c!=s['cause']]
         if not choices:
             st.info('Choose a mortality collection with another cause to compare.')
@@ -2330,7 +3095,7 @@ def render_comparison(selection):
         op=s|{'second_cause':second}
         if st.button('Compare causes',type='primary'):
             try:
-                other,meta=live_inputs(second,s['dataset'],selection.refresh_after)
+                other,meta=live_inputs(second,s['dataset'],selection.refresh_after,selection.archive)
                 st.session_state.snapshots[meta['sha256']]=meta
                 b=other[(other.Country==s['country'])&(other.Cause==second)&(other.Sex==s['sex'])&
                         (other.Age==s['age'])&other.Year.between(*s['years'])&other.dataset.eq(s['dataset'])][['Year','Rate']]
@@ -2344,7 +3109,7 @@ def render_comparison(selection):
             c1,c2=st.columns(2)
             c1.metric('Shared years',info['n_years'],border=True)
             r=info['annual_change_correlation']
-            c2.metric('Correlation of annual changes',f'{r:.2f}' if np.isfinite(r) else '—',border=True)
+            c2.metric('Correlation of annual changes',f'{r:.2f}' if np.isfinite(r) else 'â€”',border=True)
             labels={'Index_A':CAUSES.get(s['cause'],s['cause']),'Index_B':CAUSES.get(second,second)}
             chart=table[['Year','Index_A','Index_B']].melt(id_vars='Year',var_name='Cause',value_name='Index')
             chart['Cause']=chart.Cause.map(labels)
@@ -2362,10 +3127,12 @@ def render_comparison(selection):
 
 
 def render_context(selection):
+    render_context_screen(selection)
+    if selection.settings['dataset']==BOTH_ANALYSIS:return
     s=selection.settings
     with st.container(border=True,key='context_panel'):
         st.subheader('Health and economic factors',anchor=False)
-        st.caption(selection.title+' · '+selection.subtitle)
+        st.caption(selection.title+' Â· '+selection.subtitle)
         factors=st.multiselect('Indicators',list(FACTOR_SPECS),default=['GDP per capita'],key='factor_indicators',persist_state='page')
         eligible=sorted(set(selection.cohort.Country)&set(EU27))
         with st.expander('Model settings and indicator definitions'):
@@ -2384,9 +3151,9 @@ def render_context(selection):
                 if not factors:raise ValueError('Select at least one indicator.')
                 panel=selection.cohort[selection.cohort.Country.isin(chosen)][['Country','Year','Rate']].rename(columns={'Rate':'Mortality'})
                 definitions=[]
-                with st.spinner('Matching indicators by country and year…'):
+                with st.spinner('Matching indicators by country and yearâ€¦'):
                     for name in factors:
-                        factor,meta=contextual_input(name,s['sex'],tuple(EU27),selection.refresh_after)
+                        factor,meta=contextual_input(name,s['sex'],tuple(EU27),selection.refresh_after,selection.archive)
                         st.session_state.snapshots[meta['sha256']]=meta
                         definitions.append({k:v for k,v in meta.items() if k in ('definition','selectors','dataset','indicator_name')})
                         panel=panel.merge(factor[['Country','Year',name]],on=['Country','Year'],how='left',validate='one_to_one')
@@ -2418,6 +3185,8 @@ def render_context(selection):
 
 
 def render_spatial(selection):
+    render_spatial_years(selection)
+    if selection.settings['dataset']==BOTH_ANALYSIS:return render_history_spatial(selection)
     s=selection.settings;cohort=selection.cohort;years=s['years']
     map_data=cohort[cohort.Country.isin(EU27)].copy()
     map_data['iso3']=map_data.Country.map(alpha3)
@@ -2425,7 +3194,7 @@ def render_spatial(selection):
     map_data=map_data.sort_values(['Year','Country'])
     with st.container(border=True,key='map_panel'):
         st.subheader('Mortality across Europe',anchor=False)
-        st.caption(f"{CAUSES.get(s['cause'],s['cause'])} · {AGE_LABELS[s['age']]} · {SEX_LABELS[s['sex']]} · {COLLECTION_LABELS[s['dataset']]} collection")
+        st.caption(f"{CAUSES.get(s['cause'],s['cause'])} Â· {AGE_LABELS[s['age']]} Â· {SEX_LABELS[s['sex']]} Â· {COLLECTION_LABELS[s['dataset']]} collection")
         seen=map_data[map_data.Rate.notna()]
         if not seen.empty:
             plot=px.choropleth(map_data,locations='iso3',color='Rate',hover_name='CountryName',scope='europe',
@@ -2443,7 +3212,7 @@ def render_spatial(selection):
         else:st.info('No EU27 national rates match this selection.')
     with st.container(border=True,key='spatial_panel'):
         st.subheader('Spatial association',anchor=False)
-        st.caption('Moran’s I measures whether neighbouring countries tend to have similar rates.')
+        st.caption('Moranâ€™s I measures whether neighbouring countries tend to have similar rates.')
         a,b=st.columns(2)
         year=a.selectbox('Year for spatial association',sorted(cohort.Year.unique(),reverse=True),key='spatial_year',persist_state='page')
         permutations=b.selectbox('Spatial permutations',[999,9999],index=1,key='spatial_permutations',persist_state='page')
@@ -2459,7 +3228,7 @@ def render_spatial(selection):
         item=current_result('spatial',op)
         if item:
             m=item['metadata'];a,b,c=st.columns(3)
-            a.metric('Moran’s I',f"{m['Moran_I']:.3f}",border=True)
+            a.metric('Moranâ€™s I',f"{m['Moran_I']:.3f}",border=True)
             b.metric('Permutation p value',f"{m['p']:.3g}",border=True)
             c.metric('Connected countries',m['n_countries'],border=True)
             if m['isolates_excluded']:st.caption('Without a connected neighbour: '+', '.join(m['isolates_excluded']))
@@ -2474,11 +3243,11 @@ def render_spatial(selection):
                 captured={'mortality':inputs};population=None
                 weight_years=population_weight_years(selection)
                 if weight_years:
-                    candidate=retrieve_population_weights(weight_years,selection.refresh_after)
+                    candidate=retrieve_population_weights(weight_years,selection.refresh_after,selection.archive)
                     included=table.IncludedCountries.iloc[0].split(';')
                     population=covered_population(candidate,included,years)
                     if population is not None:captured['population']=population
-                with st.spinner('Resampling country histories…'):
+                with st.spinner('Resampling country historiesâ€¦'):
                     tables=dispersion_tables(inputs,op,population)
                 remember('dispersion',op,tables,captured)
             except ValueError as exc:st.warning(str(exc))
@@ -2515,9 +3284,9 @@ def render_spatial(selection):
         if st.button('Cluster complete trajectories'):
             try:
                 panel=map_data.pivot(index='Country',columns='Year',values='Rate').reindex(columns=range(years[0],years[1]+1))
-                with st.spinner('Grouping country trajectories…'):
+                with st.spinner('Grouping country trajectoriesâ€¦'):
                     membership,scores,info=cluster_trajectories(panel,representation)
-                remember('clustering',op,{'clusters':membership,'silhouettes':scores},{'trajectories':panel.reset_index()},info)
+                remember('clustering',op,{'clusters':membership,'silhouettes':scores,'summary':cluster_summary(info)},{'trajectories':panel.reset_index()},info)
             except ValueError as exc:st.warning(str(exc))
         item=current_result('clustering',op)
         if item:
@@ -2547,10 +3316,11 @@ def render_spatial(selection):
 
 
 def render_network(selection):
+    if selection.settings['dataset']==BOTH_ANALYSIS:return render_history_network(selection)
     s=selection.settings;cohort=selection.cohort;years=s['years']
     with st.container(border=True,key='network_panel'):
         st.subheader('Temporal prediction between neighbours',anchor=False)
-        st.caption(f"{CAUSES.get(s['cause'],s['cause'])} · {AGE_LABELS[s['age']]} · {SEX_LABELS[s['sex']]} · {years[0]}–{years[1]}")
+        st.caption(f"{CAUSES.get(s['cause'],s['cause'])} Â· {AGE_LABELS[s['age']]} Â· {SEX_LABELS[s['sex']]} Â· {years[0]}â€“{years[1]}")
         eligible=sorted(c for c in cohort.Country.unique() if len(c)==2)
         a,b=st.columns([3,1])
         chosen=a.multiselect('Network countries',eligible,default=[c for c in ['DE','FR','BE','NL'] if c in eligible],
@@ -2575,7 +3345,7 @@ def render_network(selection):
             else:
                 q=tests.pivot(index='Source',columns='Target',values='q_BY').reindex(index=chosen,columns=chosen)
                 fig=px.imshow(q,aspect='auto',color_continuous_scale='Teal_r',zmin=0,zmax=1,
-                              labels={'x':'Target country','y':'Source country','color':'Adjusted p'})
+                              labels={'x':'Target country','y':'Source country','color':'Adjusted q'})
                 plot_chart(fig,height=340,alt='Adjusted p values for eligible directed pairs',key='network_heatmap')
                 with st.expander('Tested pairs'):
                     st.dataframe(tests,hide_index=True,width='stretch')
@@ -2587,24 +3357,336 @@ def render_network(selection):
         st.caption('These tests assess predictive associations. They cannot establish transmission or a causal effect.')
 
 
+
+# Two-collection views keep the original workspaces and controls.
+def _history_header(selection):
+    st.caption(selection.title+' Â· '+selection.subtitle)
+    st.caption('Both collections contribute to the analysis. The 2010â€“2011 transition is never used as an annual change or lag.')
+
+
+def _history_flags(key):
+    return st.checkbox('Omit observations flagged b, d or u',value=False,key=key,
+                       help='Sensitivity analysis: omit source breaks, differing definitions and low reliability. A gap is not interpolated.')
+
+
+def _history_countries(selection,key):
+    eligible=sorted(set(selection.cohort.loc[selection.cohort.Rate.notna(),'Country'])&set(EU27))
+    return st.multiselect('EU Member States',eligible,default=eligible,key=key,
+                          format_func=lambda c:selection.country_labels.get(c,c),persist_state='page')
+
+
+def _history_source_names(data):
+    return data.assign(Collection=data.dataset.map(COLLECTION_LABELS))
+
+
+def _history_break(fig):
+    fig.add_vline(x=2010.5,line_dash='dot',line_color='#72808b',annotation_text='2011 reporting break')
+
+
+def render_history_trends(selection):
+    s=selection.settings;show_timeline(selection,None)
+    with st.container(border=True,key='history_trends'):
+        st.subheader('Changes within each collection',anchor=False)
+        _history_header(selection)
+        flags=_history_flags('history_trend_flags')
+        with st.expander('Trend settings'):
+            penalty=st.slider('Segmentation penalty multiplier',1.0,8.0,3.0,.5,key='history_penalty')
+        op=s|{'exclude_flags':flags,'penalty_multiplier':penalty}
+        if st.button('Calculate changes and segments',type='primary'):
+            try:
+                data=selection.selected.copy()
+                remember('history_temporal',op,history_temporal_tables(data,op),{'mortality':data})
+            except ValueError as exc:st.warning(str(exc))
+        item=current_result('history_temporal',op)
+        if item:
+            t=item['tables'];st.dataframe(_history_source_names(t['summary']).drop(columns='dataset'),hide_index=True,width='stretch')
+            if not t['annual_changes'].empty:
+                a=_history_source_names(t['annual_changes']);fig=px.bar(a,x='Year',y='AnnualChangePercent',color='Collection',
+                    labels={'AnnualChangePercent':'Annual change (%)'},color_discrete_sequence=[AMBER,INK]);_history_break(fig)
+                plot_chart(fig,alt='Annual mortality changes within each source',key='history_annual_changes')
+            with st.expander('Fitted segments and exclusions'):
+                st.dataframe(t['segments'],hide_index=True,width='stretch');st.dataframe(t['excluded'],hide_index=True,width='stretch')
+                st.dataframe(t['anomalies'],hide_index=True,width='stretch')
+    with st.container(border=True,key='history_forecasts'):
+        st.subheader('Forecasts with a longer history',anchor=False)
+        st.caption('Three point forecasts start at the last modern rate. Rolling tests compare all three at the same modern targets.')
+        horizon=st.slider('Forecast horizon in years',1,3,3,key='history_horizon')
+        with st.expander('Countries in the forecast comparison'):
+            countries=_history_countries(selection,'history_forecast_countries')
+        compare_damped=st.checkbox('Compare with modern damped drift on matched targets',key='history_match_damped',
+            help='Also compare the longer-history forecast with the modern log1p damped model. Both forecasts use the same held-out outcomes and training error scale.')
+        op=s|{'countries':countries,'horizon':horizon,'exclude_flags':flags,'compare_damped':compare_damped}
+        if st.button('Run longer-history forecasts',type='primary'):
+            try:
+                data=selection.cohort.copy()
+                remember('history_forecast',op,history_forecast_tables(data,op),{'mortality':data})
+            except ValueError as exc:st.warning(str(exc))
+        item=current_result('history_forecast',op)
+        if item:
+            t=item['tables'];f=t['forecasts']
+            if f.empty:st.info('The selected country or aggregate does not have enough eligible rates in both collections for a longer-history projection.')
+            else:
+                f0=selection.selected[selection.selected.dataset.eq(MODERN_COLLECTION)]
+                fig=go.Figure(go.Scatter(x=f0.Year,y=f0.Rate,mode='lines+markers',name='Observed modern rates',line=dict(color=INK)))
+                for (name,g),color in zip(f.groupby('Model',sort=False),(TEAL,PURPLE,AMBER)):
+                    start=int(g.Origin.iloc[0]);anchor=float(f0.loc[f0.Year.eq(start),'Rate'].iloc[0])
+                    fig.add_trace(go.Scatter(x=[start,*g.Year],y=[anchor,*g.Prediction],mode='lines+markers',
+                                             name=name,line=dict(color=color,dash='dash')))
+                fig.update_layout(yaxis_title=RATE_LABEL)
+                plot_chart(fig,alt='Modern observed rates and three point forecasts',key='history_forecast_fig')
+            if not t['scores'].empty:
+                scores=t['scores']
+                st.markdown('**Scaled error at common held-out targets**')
+                fig=px.line(scores,x='Horizon',y='MASE',color='Model',markers=True,
+                    labels={'Horizon':'Forecast horizon (years)','MASE':'Mean absolute scaled error'},
+                    color_discrete_sequence=[INK,TEAL,AMBER]);fig.update_xaxes(dtick=1)
+                plot_chart(fig,height=330,alt='Scaled forecast errors for three methods at each tested horizon',key='history_forecast_scores')
+            st.dataframe(t['scores'],hide_index=True,width='stretch')
+            with st.expander('Paired stability ranges and exclusions'):
+                st.caption('Negative differences favour the longer history. The ranges resample countries and hold the target years fixed.')
+                st.dataframe(t['paired_differences'],hide_index=True,width='stretch');st.dataframe(t['excluded'],hide_index=True,width='stretch')
+            if compare_damped:
+                with st.expander('Modern damped drift on matched targets',expanded=True):
+                    scores=t['matched_damped_scores']
+                    if scores.empty:
+                        st.info('No forecast targets met the eligibility rules for both methods.')
+                    else:
+                        chart=scores.melt(id_vars='Horizon',value_vars=['BothCollectionMASE','ModernDampedMASE'],
+                                          var_name='Method',value_name='MASE')
+                        chart['Method']=chart.Method.map({'BothCollectionMASE':'Both-collection log drift',
+                                                          'ModernDampedMASE':'Modern damped drift'})
+                        fig=px.bar(chart,x='Horizon',y='MASE',color='Method',barmode='group',
+                                   labels={'Horizon':'Forecast horizon (years)','MASE':'Mean absolute scaled error'})
+                        fig.update_xaxes(dtick=1)
+                        plot_chart(fig,height=310,alt='Forecast errors on identical modern targets',key='history_match_scores')
+                        st.caption('At each horizon the two scores use the same countries, forecast origins and target years. For the difference, countries receive equal weight and the stability range uses 5,000 country resamples.')
+                        st.dataframe(scores,hide_index=True,width='stretch',column_config={
+                            'BothCollectionMASE':'Both-collection MASE','ModernDampedMASE':'Modern damped MASE',
+                            'StabilityLow':'Stability range lower','StabilityHigh':'Stability range upper'})
+                        with st.expander('Matched forecast targets and errors'):
+                            st.dataframe(t['matched_damped_predictions'],hide_index=True,width='stretch')
+
+
+def render_history_comparison(selection):
+    s=selection.settings
+    with st.container(border=True,key='history_cause_comparison'):
+        st.subheader('Compare cause trajectories across both collections',anchor=False)
+        _history_header(selection)
+        alternatives=[c for c in selection.available if c!=s['cause']]
+        other=st.selectbox('Second cause',alternatives,format_func=lambda c:CAUSES[c],key='history_second_cause')
+        flags=_history_flags('history_cause_flags');op=s|{'causes':[s['cause'],other],'exclude_flags':flags}
+        if st.button('Compare within-collection changes',type='primary'):
+            try:
+                data=panel_inputs(selection,op['causes']);data=data[data.Country.eq(s['country'])]
+                remember('history_comparison',op,history_comparison_tables(data,op),{'mortality':data})
+            except (ValueError,RuntimeError,OSError) as exc:st.warning(str(exc))
+        item=current_result('history_comparison',op)
+        if item:
+            t=item['tables'];x=_history_source_names(t['indexed_rates'])
+            if x.empty:st.info('There are too few common years with positive baseline rates.')
+            else:
+                x['Cause']=x.Cause.map(CAUSES);fig=px.line(x,x='Year',y='Index',color='Cause',line_group='Collection',
+                   line_dash='Collection',markers=True,labels={'Index':'First common year in each collection = 100'});_history_break(fig)
+                plot_chart(fig,alt='Cause trajectories indexed to their own collection baselines',key='history_cause_fig')
+            st.dataframe(_history_source_names(t['endpoint_changes']).drop(columns='dataset'),hide_index=True,width='stretch')
+            st.dataframe(t['pooled_correlation'],hide_index=True,width='stretch')
+            st.caption('Correlation uses paired consecutive annual log changes. It describes co-movement, not a causal effect.')
+
+
+def render_context_screen(selection):
+    s=selection.settings
+    with st.container(border=True,key='indicator_screen'):
+        st.subheader('Compare contextual indicators across causes',anchor=False)
+        st.caption('Each indicator is assessed separately. The annual screen adjusts across all eligible indicatorâ€“cause tests in the current run.')
+        left,right=st.columns(2)
+        with left:causes=panel_causes(selection,'screen_causes')
+        factors=right.multiselect('Indicators',list(FACTOR_SPECS),default=list(FACTOR_SPECS),key='screen_factors',persist_state='page')
+        method=st.radio('Comparison',['annual','snapshot','snapshot_spatial'],format_func={'annual':'Within countries over time',
+                        'snapshot':'Across countries in one year','snapshot_spatial':'Across countries with a spatial test'}.get,key='screen_mode')
+        year=None; selected_years=[]; years=list(range(s['years'][0],s['years'][1]+1))
+        if method=='snapshot':
+            year=st.selectbox('Observation year',years,index=years.index(2019) if 2019 in years else len(years)-1,key='screen_year')
+            st.caption('A snapshot reports Spearman rank correlations without significance tests. Survey years are not interpolated.')
+        elif method=='snapshot_spatial':
+            selected_years=st.multiselect('Observation years',years,default=[years[-1]],max_selections=5,key='screen_spatial_years')
+            st.caption('Correlations use countries with an included land neighbour. Tests preserve the indicatorâ€™s global spatial autocorrelation and adjust across the selected causes, indicators and years.')
+        else:st.caption('The annual models use year effects and country effects within each collection. Survey indicators with fewer than three matched years are listed as ineligible.')
+        with st.expander('Countries, flags and indicator definitions'):
+            countries=_history_countries(selection,'screen_countries');flags=_history_flags('screen_flags')
+            if factors:
+                definitions=[{'Indicator':name,'Eurostat dataset':FACTOR_SPECS[name]['dataset'],
+                              'Definition':FACTOR_SPECS[name]['definition']} for name in factors]
+                st.dataframe(pd.DataFrame(definitions),hide_index=True,width='stretch')
+        op=s|{'causes':causes,'indicators':factors,'countries':countries,'context_mode':method,'snapshot_year':year,'snapshot_years':selected_years,'exclude_flags':flags}
+        if st.button('Run indicator comparison',type='primary',disabled=not causes or not factors or not countries or (method=='snapshot_spatial' and not selected_years)):
+            try:
+                with st.spinner('Matching mortality and indicators by country and yearâ€¦'):
+                    mortality=panel_inputs(selection,causes);rows=[]
+                    for name in factors:
+                        try:factor,meta=contextual_input(name,s['sex'],tuple(countries),selection.refresh_after,selection.archive)
+                        except NoEurostatObservations:
+                            continue
+                        st.session_state.snapshots[meta['sha256']]=meta
+                        rows.append(factor.rename(columns={name:'IndicatorValue'}).assign(Indicator=name))
+                    indicators=_stack_tables(rows,['Country','Year','IndicatorValue','FactorFlag','Indicator']).rename(columns={'FactorFlag':'IndicatorFlag'})
+                    remember('context_screen',op,context_screen_tables(mortality,indicators,op),{'mortality':mortality,'indicators':indicators})
+            except (ValueError,RuntimeError,OSError) as exc:st.warning(str(exc))
+        item=current_result('context_screen',op)
+        if item:
+            t=item['tables'];a=t['associations'];ok=a[a.Status.eq('Estimated')];n=len(ok)
+            st.caption(f'{n} of {len(a)} indicatorâ€“cause combinations could be estimated.')
+            if method!='snapshot':st.caption(f"{int(ok.q_BY.lt(.05).sum())} estimates had an adjusted q value below 0.05. These are ecological associations, not individual risks or causal effects.")
+            if n:
+                if method=='snapshot_spatial':
+                    view=st.selectbox('Display observation year',sorted(ok.ObservationYear.unique()),key='screen_result_year')
+                    with st.expander('Compare an indicator across years'):
+                        name=st.selectbox('Indicator to compare across years',list(ok.Indicator.unique()),key='screen_trend_indicator')
+                        trend=ok[ok.Indicator.eq(name)].sort_values('ObservationYear').assign(
+                            Outcome=lambda x:x.Cause.map(lambda c:CAUSES.get(c,c)))
+                        trend_plot=px.line(trend,x='ObservationYear',y='Estimate',color='Outcome',markers=True,
+                            hover_data=['CountriesUsed','p','q_BY'],labels={'ObservationYear':'Year','Estimate':'Spearman rank correlation'})
+                        trend_plot.add_hline(y=0,line_dash='dot');trend_plot.update_xaxes(dtick=1);trend_plot.update_yaxes(range=[-1,1])
+                        plot_chart(trend_plot,height=285,alt='Cross-country rank correlations for one indicator by year and cause',key='screen_trend_plot')
+                    ok=ok[ok.ObservationYear.eq(view)]
+                cause=st.selectbox('Display estimates for',list(ok.Cause.unique()),format_func=lambda c:CAUSES[c],key='screen_plot_cause')
+                q=ok[ok.Cause.eq(cause)];fig=go.Figure(go.Scatter(x=q.Estimate,y=q.Indicator,mode='markers',
+                    marker=dict(color=TEAL,size=9),customdata=q[['Unit','CountriesUsed']].to_numpy(),
+                    hovertemplate='%{y}: %{x:.3f}<br>%{customdata[0]}<br>%{customdata[1]} countries<extra></extra>',
+                    error_x=dict(type='data',symmetric=False,array=q.Upper95-q.Estimate,arrayminus=q.Estimate-q.Lower95) if method=='annual' else None))
+                fig.add_vline(x=0,line_color='#72808b',line_dash='dot');fig.update_layout(xaxis_title='Mortality difference (%) for the indicated exposure increment' if method=='annual' else 'Spearman rank correlation')
+                plot_chart(fig,height=max(250,len(q)*38+120),alt='Contextual indicator estimates for the selected cause',key='screen_chart')
+                if method!='annual':
+                    name=st.selectbox('Plot country observations for',list(q.Indicator),key='screen_scatter_indicator')
+                    year=view if method=='snapshot_spatial' else op['snapshot_year']
+                    obs=t['matched_observations'];obs=obs[obs.Cause.eq(cause)&obs.Indicator.eq(name)&obs.Year.eq(year)]
+                    fig=px.scatter(obs,x='IndicatorValue',y='Rate',hover_name='Country',labels={'IndicatorValue':name,'Rate':RATE_LABEL})
+                    plot_chart(fig,height=305,alt='Mortality rate and contextual indicator by country',key='screen_scatter')
+            st.dataframe(a,hide_index=True,width='stretch')
+            with st.expander('Matched observations used in estimates'):
+                st.dataframe(t['matched_observations'],hide_index=True,width='stretch')
+
+
+def render_spatial_years(selection):
+    s=selection.settings
+    with st.expander('Compare geographical association across years'):
+        st.caption('Use the same national panel in all selected years and adjust across the border tests.')
+        vals=selection.cohort;vals=vals[vals.Country.isin(EU27)&vals.Rate.notna()]
+        available=sorted(vals.Year.unique().tolist())
+        if not available:
+            st.info('No national values for these filters.');return
+        years=st.multiselect('Map years',available,default=[available[-1]],max_selections=5,key='multi_map_years')
+        flags=_history_flags('multi_map_flags')
+        op=s|{'map_years':years,'countries':sorted(EU27),'exclude_flags':flags}
+        if st.button('Compare map years',type='primary',disabled=not years):
+            try:
+                data=selection.cohort.copy()
+                remember('spatial_years',op,spatial_year_tables(data,op),{'mortality':data})
+            except ValueError as exc:st.warning(str(exc))
+        item=current_result('spatial_years',op)
+        if item:
+            t=item['tables'];m=t['rates'].copy();m['ISO3']=m.Country.map(alpha3);m['Year']=m.Year.astype(str)
+            fig=px.choropleth(m,locations='ISO3',color='Rate',animation_frame='Year',hover_name='Country',scope='europe',
+                              color_continuous_scale='Blues',range_color=(0,m.Rate.max()),labels={'Rate':RATE_LABEL})
+            plot_chart(fig,height=390,alt='Maps of national mortality on the same country panel and colour scale',key='spatial_year_maps')
+            st.dataframe(t['spatial_association'],hide_index=True,width='stretch')
+            st.caption('A positive Moranâ€™s I measures similarity of nearby rates. It does not establish transmission between countries.')
+
+
+def render_history_spatial(selection):
+    s=selection.settings
+    with st.container(border=True,key='history_spatial'):
+        st.subheader('Geographical patterns in both collections',anchor=False)
+        _history_header(selection)
+        st.caption('Dispersion and clustering use the same countries in both periods. The border test uses the final year within each collection. Shorten the year range if early coverage is sparse.')
+        with st.expander('Countries and source flags'):
+            countries=_history_countries(selection,'history_spatial_countries');flags=_history_flags('history_spatial_flags')
+        op=s|{'countries':countries,'exclude_flags':flags}
+        if st.button('Calculate dispersion and trajectory groups',type='primary'):
+            try:
+                data=selection.cohort.copy()
+                remember('history_spatial',op,history_spatial_tables(data,op),{'mortality':data})
+            except ValueError as exc:st.warning(str(exc))
+        item=current_result('history_spatial',op)
+        if item:
+            t=item['tables'];a=_history_source_names(t['annual_dispersion'])
+            measure=st.selectbox('Dispersion measure',['IQR','P90_P10','LogSD','CV'],format_func=lambda m:METRIC_NAMES.get(m,m),key='history_dispersion_measure')
+            fig=px.line(a,x='Year',y=measure,color='Collection',markers=True,labels={measure:METRIC_NAMES.get(measure,measure)},color_discrete_sequence=[AMBER,INK]);_history_break(fig)
+            plot_chart(fig,alt='Mortality dispersion on a fixed country panel within each collection',key='history_dispersion_fig')
+            st.dataframe(_history_source_names(t['dispersion_endpoints']).drop(columns='dataset'),hide_index=True,width='stretch')
+            st.caption('Endpoint change ranges resample the fixed countries together across both collections.')
+            st.dataframe(_history_source_names(t['moran']).drop(columns='dataset'),hide_index=True,width='stretch')
+            p=_history_source_names(t['cluster_profiles'])
+            if len(p):
+                fig=px.line(p,x='Year',y='MedianStandardisedLogRate',color=p.Cluster.astype(str),line_group='Collection',
+                            labels={'MedianStandardisedLogRate':'Median standardised log rate','color':'Group'});_history_break(fig)
+                plot_chart(fig,alt='Median trajectory by empirical cluster and collection',key='history_cluster_fig')
+            st.dataframe(t['cluster_fit'],hide_index=True,width='stretch')
+            with st.expander('Country membership and cluster assignments'):
+                st.dataframe(t['members'].merge(t['clusters'],on='Country',how='left'),hide_index=True,width='stretch')
+
+
+def render_history_network(selection):
+    s=selection.settings
+    with st.container(border=True,key='history_network'):
+        st.subheader('Lagged prediction using both collections',anchor=False)
+        _history_header(selection)
+        st.caption('Predict annual changes using a countryâ€™s own history and the lagged changes of a land neighbour. The model fits a separate mean for each collection.')
+        with st.expander('Countries and source flags'):
+            countries=_history_countries(selection,'history_network_countries');flags=_history_flags('history_network_flags')
+        lag=st.selectbox('Predictive lag in years',[1,2,3],key='history_network_lag')
+        op=s|{'countries':countries,'exclude_flags':flags,'lag':lag}
+        if st.button('Test prediction between neighbours',type='primary',disabled=len(countries)<2):
+            try:
+                data=selection.cohort.copy()
+                remember('history_network',op,history_network_tables(data,op),{'mortality':data})
+            except (ValueError,np.linalg.LinAlgError) as exc:st.warning(str(exc))
+        item=current_result('history_network',op)
+        if item:
+            t=item['tables'];tests=t['tests'];n=len(tests)
+            a,b,c=st.columns(3);a.metric('Pairs tested',n,border=True);b.metric('Pairs excluded',len(t['excluded']),border=True)
+            c.metric('Adjusted q < 0.05',int(tests.q_BY.lt(.05).sum()),border=True)
+            if n:
+                q=tests.pivot(index='Source',columns='Target',values='q_BY').reindex(index=countries,columns=countries)
+                fig=px.imshow(q,aspect='auto',color_continuous_scale='Teal_r',zmin=0,zmax=1,labels={'x':'Target','y':'Source','color':'Adjusted q'})
+                plot_chart(fig,height=max(350,16*len(countries)+130),alt='Adjusted q values for eligible directions; blank cells were not tested',key='history_network_fig')
+            else:st.info('No neighbouring direction had enough usable annual changes in both collections.')
+            p=t['forecast_checks'].copy()
+            if len(p):
+                p['Pair']=p.Source+' â†’ '+p.Target;p['ErrorDifference']=100*(p.NeighbourMAE-p.SelfMAE)
+                st.caption(f"Held-out error fell in {int(p.ErrorDifference.lt(0).sum())} of {len(p)} directions with scored targets.")
+                p=p.sort_values('ErrorDifference');p['Lower error with neighbour']=p.ErrorDifference.lt(0).map({True:'Yes',False:'No'})
+                fig=px.bar(p,x='Pair',y='ErrorDifference',color='Lower error with neighbour',
+                           labels={'ErrorDifference':'Change in held-out MAE (log percentage points)'})
+                fig.add_hline(y=0,line_dash='dot');fig.update_xaxes(showticklabels=False)
+                plot_chart(fig,alt='Held-out error with a neighbour minus error with own history for each direction',key='history_network_forecast_fig')
+            with st.expander('Tests and held-out prediction checks'):
+                st.dataframe(tests.merge(t['forecast_checks'],on=['Source','Target'],how='left'),hide_index=True,width='stretch')
+                st.dataframe(t['excluded'],hide_index=True,width='stretch')
+        st.caption('Lag tests use an approximate within-collection autocorrelation adjustment. Shared shocks can produce predictive associations; these tests do not establish transmission.')
+
+
+
 def main():
-    st.set_page_config(page_title='European Public Health Dashboard',page_icon='📊',layout='wide',initial_sidebar_state='auto')
+    st.set_page_config(page_title='European Public Health Dashboard',page_icon='ðŸ“Š',layout='wide',initial_sidebar_state='auto')
     st.html(DASHBOARD_HEADER)
     if 'analyses' not in st.session_state:st.session_state.analyses={}
     if 'snapshots' not in st.session_state:st.session_state.snapshots={}
-    selection,sources=read_selection()
+    archive,raw=choose_data_source()
+    captured=st.session_state.get('data_source_mode')=='Eurostat responses from an archive'
+    selection,sources=read_selection(archive) if not captured or archive is not None else (None,[])
     if selection is not None:
         tabs=st.tabs(WORKSPACES,key='analysis_tabs',on_change='rerun')
         for tab,render in zip(tabs,(render_trends,render_comparison,render_context,render_spatial,render_network)):
             if tab.open:
                 with tab:render(selection)
     show_analysis_exports()
+    render_archive_inputs(raw,st.session_state.get('captured_responses',(None,None))[0])
     with st.expander('Eurostat sources'):
         latest={meta['dataset']:meta for meta in st.session_state.snapshots.values()}
         latest.update({meta['dataset']:meta for meta in sources})
         for code,meta in latest.items():
             label=COLLECTION_LABELS.get(code,meta.get('indicator_name','Population weights' if code=='demo_pjan' else code))
-            st.caption(f"{label} · {code} · Source update: {meta.get('updated',meta.get('source_updated','not provided'))} · Retrieved: {meta.get('retrieved_utc','not recorded')}")
+            st.caption(f"{label} Â· {code} Â· Source update: {meta.get('updated',meta.get('source_updated','not provided'))} Â· Retrieved: {meta.get('retrieved_utc','not recorded')}")
         st.markdown('[Eurostat causes-of-death metadata](https://ec.europa.eu/eurostat/cache/metadata/en/hlth_cdeath_sims.htm)')
         st.caption(f'Dashboard version {__version__}')
 
